@@ -1,6 +1,8 @@
 import pandas as pd
 import datetime as dt
-from sklearn import linear_model
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import minimize
 
 
 def make_track(df_price, df_weight, tc=0):
@@ -28,7 +30,7 @@ def make_track(df_price, df_weight, tc=0):
     for i in index[1:]:
 
         if index[i-1] in reweight_index and i > 0:
-            cost = tc * value[i-1] * np.abs(df_weight.loc[index[i-1]] - value[i-1] / (df_shares.loc[index[i-1]] * df_price.loc[index[i-1]])).sum()
+            cost = tc * value[i-1] * np.abs(df_weight.loc[index[i-1]] - value[i-1] / (shares.loc[index[i-1]] * df_price.loc[index[i-1]])).sum()
             value[i] = (shares * df_price.loc[index[i]]).sum() - cost
             shares = df_weight.loc[index[i-1]] * value[i] / df_price.loc[index[i]]
         else: 
@@ -38,6 +40,36 @@ def make_track(df_price, df_weight, tc=0):
         # df_track.iloc[i] = df_track.iloc[i]*value
 
     return pd.Series(index=index, data=value)
+
+
+def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries= (-np.inf, np.inf),
+                   weight_sum = np.nan):
+
+    index = df_y.index.copy()
+    n, m = df_x.shape
+
+    df_weight = pd.DataFrame(columns=df_x.columns)
+
+    for i in range((n- sample_length)//frequency):
+
+        start = index[i*frequency]
+        end = index[i*frequency + sample_length]
+
+        x = df_x.loc[start:end].values
+        y = df_y.loc[start:end].values
+
+        def loss(z):
+            return np.sum(np.square(np.dot(x, z)-y))
+
+        cons = ({'type': 'eq',
+                 'fun': lambda z: np.sum(z) - weight_sum}) if not np.isnan(weight_sum) else ()
+        bounds = boundaries*m
+        x0 = np.zeros(m)
+        res = minimize(loss, x0, method='SLSQP', constraints=cons, bounds=bounds)
+
+        df_weight.loc[x] = res.x
+
+    return df_weight
 
 
 if __name__ == "__main__":
@@ -55,30 +87,20 @@ if __name__ == "__main__":
     dates = returns.index.copy()
     n = len(dates)
 
-    sample_period = 8
-    reg_freq = 4
+    sample = 52
+    freq = 13
 
-    df_weight = pd.DataFrame(columns=bch.columns)
+    weight = ols_regression(sx5e, bch, sample, freq)
 
-    for i in range((n - sample_period) // reg_freq):
-        start = dates[i * reg_freq]
-        end = dates[i * reg_freq + sample_period]
+    prices_for_track = prices.loc[weight.index[0]:].drop("SX5E", axis=1)
+    replication = make_track(prices_for_track, weight)
 
-        x = bch.loc[start:end]
-        y = sx5e.loc[start:end]
-
-        reg = linear_model.LinearRegression()
-        reg.fit(x, y)
-        df_weight.loc[end] = reg.coef_[0]
-
-    prices_for_track = prices.loc[df_weight.index].drop("SX5E", axis=1)
-    replication = make_track(prices_for_track, df_weight)
-
-    df_res = prices.loc[df_weight.index][["SX5E"]]
+    df_res = prices.loc[weight.index[0]:][["SX5E"]]
     df_res["OLS"] = replication
 
     df_res = df_res / df_res.iloc[0]
 
     df_res.plot(figsize=(10, 6))
+    plt.show()
 
 

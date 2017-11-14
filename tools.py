@@ -2,8 +2,34 @@ import pandas as pd
 import datetime as dt
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from scipy.optimize import minimize
 
+
+def make_track_gui(df_price, df_weight, tc=0):
+
+    df_shares = (df_weight/df_price).ffill()
+    df_values = df_shares*df_price
+
+    values = df_values.values
+    shares = df_shares.values
+
+    index = df_price.index
+    reweight_index = df_weight.index
+
+    n = len(index)
+
+    total_value = 1.0
+
+    for i in range(1, len(index)):
+
+        if index[i-1] in reweight_index:
+            total_value = values[i-1, :].sum()
+            cost = tc * (values[i-1, :] - values[i, :] * total_value).sum()
+            total_value = total_value - cost
+        values[i, :] = values[i, :]*total_value
+
+    return df_values.sum(axis=1)
 
 
 def make_track(df_price, df_weight, tc=0):
@@ -28,10 +54,10 @@ def make_track(df_price, df_weight, tc=0):
 
     value = np.ones(n)
 
-    for i in range(1,n):
+    for i in range(1, len(index)):
 
-        if index[i-1] in reweight_index and i > 0:
-            cost = tc * value[i-1] * np.abs(df_weight.loc[index[i-1]] - (shares * df_price.loc[index[i-1]]) / value[i-1]).sum()
+        if index[i-1] in reweight_index:
+            cost = tc * value[i-1] * np.abs(df_weight.loc[index[i-1]] - (shares * df_price.loc[index[i-1]])/value[i-1]).sum()
             value[i] = (shares * df_price.loc[index[i]]).sum() - cost
             shares = df_weight.loc[index[i-1]] * value[i] / df_price.loc[index[i]]
         else: 
@@ -43,14 +69,15 @@ def make_track(df_price, df_weight, tc=0):
     return pd.Series(index=index, data=value)
 
 
-def ols_regression(df_y, df_x, sample_length: int, frequency: int, weight_sum=1.): #, boundaries=(-np.inf, np.inf)
+def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries= (-np.inf, np.inf),
+                   weight_sum = np.nan):
 
     index = df_y.index.copy()
     n, m = df_x.shape
 
     df_weight = pd.DataFrame(columns=df_x.columns)
 
-    for i in range((n- sample_length)//frequency):
+    for i in range((n - sample_length)//frequency):
 
         start = index[i*frequency]
         end = index[i*frequency + sample_length]
@@ -62,18 +89,18 @@ def ols_regression(df_y, df_x, sample_length: int, frequency: int, weight_sum=1.
             return np.sum(np.square(np.dot(x, z)-y))
 
         cons = ({'type': 'eq',
-                 'fun': lambda z: np.sum(z) - weight_sum})
-        #bounds = boundaries*m
+                 'fun': lambda z: np.sum(z) - weight_sum}) if not np.isnan(weight_sum) else ()
+        bounds = [boundaries]*m
         x0 = np.zeros(m)
-        res = minimize(loss, x0, method='SLSQP', constraints=cons)
+        res = minimize(loss, x0, method='SLSQP', constraints=cons, bounds=bounds)
 
-        df_weight.ix[end] = res.x
+        df_weight.loc[start] = res.x
 
     return df_weight
 
 
 if __name__ == "__main__":
-
+    sns.set()
     prices = pd.read_csv(r"financial_data/prices.csv", index_col=0)
     prices.index = pd.DatetimeIndex(prices.index)
 
@@ -84,19 +111,18 @@ if __name__ == "__main__":
     bch = returns.drop("SX5E", axis=1)
 
     # Params
-    dates = returns.index.copy()
-    n = len(dates)
-
     sample = 52
     freq = 13
 
-    weight = ols_regression(sx5e, bch, sample, freq, weight_sum=1.)
+    weight = ols_regression(sx5e, bch, sample, freq, boundaries=(0, np.inf), weight_sum=1)
 
     prices_for_track = prices.loc[weight.index[0]:].drop("SX5E", axis=1)
     replication = make_track(prices_for_track, weight)
+    replication2 = make_track_gui(prices_for_track, weight)
 
     df_res = prices.loc[weight.index[0]:][["SX5E"]]
-    df_res["OLS"] = replication
+    df_res["OLS Rui"] = replication
+    df_res["OLS Gui"] = replication2
 
     df_res = df_res / df_res.iloc[0]
 

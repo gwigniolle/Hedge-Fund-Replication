@@ -13,23 +13,31 @@ def make_track(df_price, df_weight, tc=0):
     :return: a pandas series containing the track made from the composition in df_weight
     """
 
-    df_shares = (df_weight/df_price.shift(1).bfill()).ffill()
-    df_track = df_shares*df_price
-    values = df_track.values
+    # df_shares = (df_weight/df_price.shift(1).bfill()).ffill()
+    # df_track = df_shares*df_price
+    # values = df_track.values
 
     index = df_price.index
     reweight_index = df_weight.index
 
-    n, m = values.shape
+    n = len(index)
+    shares = (df_weight / df_price).iloc[0]
 
-    value = 1
+    value = np.ones(n)
 
-    for i in range(n):
-        if index[i] in reweight_index and i > 0:
-            value = (1-tc)*df_track.iloc[i-1].sum()
-        df_track.iloc[i] = df_track.iloc[i]*value
+    for i in index[1:]:
 
-    return df_track.sum(axis=1)
+        if index[i-1] in reweight_index and i > 0:
+            cost = tc * value[i-1] * np.abs(df_weight.loc[index[i-1]] - value[i-1] / (df_shares.loc[index[i-1]] * df_price.loc[index[i-1]])).sum()
+            value[i] = (shares * df_price.loc[index[i]]).sum() - cost
+            shares = df_weight.loc[index[i-1]] * value[i] / df_price.loc[index[i]]
+        else: 
+            value[i] = (shares * df_price.loc[index[i]]).sum()
+
+        #     value = (1-tc)*df_track.iloc[i-1].sum()
+        # df_track.iloc[i] = df_track.iloc[i]*value
+
+    return pd.Series(index=index, data=value)
 
 
 if __name__ == "__main__":

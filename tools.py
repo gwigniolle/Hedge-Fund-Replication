@@ -10,15 +10,10 @@ def make_track(df_price, df_weight, tc=0):
     """
     :param df_price: a dataframe containing the prices of the underlyings used in the index, columns must be the names
     and the index are the dates
-    :type pd.Dataframe
     :param df_weight: a dataframe containing the weight on the rebalancing dates of the track created
     :param tc: transaction cost, default is 0
     :return: a pandas series containing the track made from the composition in df_weight
     """
-
-    # df_shares = (df_weight/df_price.shift(1).bfill()).ffill()
-    # df_track = df_shares*df_price
-    # values = df_track.values
 
     index = df_price.index
     reweight_index = df_weight.index
@@ -36,9 +31,6 @@ def make_track(df_price, df_weight, tc=0):
             shares = df_weight.loc[index[i-1]] * value[i] / df_price.loc[index[i]]
         else: 
             value[i] = (shares * df_price.loc[index[i]]).sum()
-
-        #     value = (1-tc)*df_track.iloc[i-1].sum()
-        # df_track.iloc[i] = df_track.iloc[i]*value
 
     return pd.Series(index=index, data=value)
 
@@ -67,7 +59,6 @@ def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-
         bounds = [boundaries]*m
         z0 = np.zeros([m, 1])
 
-        test = np.dot(x, z0)
         res = minimize(loss, z0, method='SLSQP', constraints=cons, bounds=bounds)
 
         df_weight.loc[end] = res.x
@@ -92,14 +83,12 @@ if __name__ == "__main__":
 
     weight = ols_regression(sx5e, bch, sample, freq, boundaries=(0, np.inf), weight_sum=1)
     prices_for_track = prices.loc[weight.index[0]:].drop("SX5E", axis=1)
-
     replication = make_track(prices_for_track, weight)
 
     df_res = prices.loc[weight.index[0]:][["SX5E"]]
     df_res["OLS Rui"] = replication
 
     df_res = df_res.bfill()
-
     df_res = df_res / df_res.iloc[0]
 
     df_res.plot(figsize=(10, 6))

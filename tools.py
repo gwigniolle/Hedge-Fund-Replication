@@ -6,32 +6,6 @@ import seaborn as sns
 from scipy.optimize import minimize
 
 
-def make_track_gui(df_price, df_weight, tc=0):
-
-    df_shares = (df_weight/df_price).ffill()
-    df_values = df_shares*df_price
-
-    values = df_values.values
-    shares = df_shares.values
-
-    index = df_price.index
-    reweight_index = df_weight.index
-
-    n = len(index)
-
-    total_value = 1.0
-
-    for i in range(1, len(index)):
-
-        if index[i-1] in reweight_index:
-            total_value = values[i-1, :].sum()
-            cost = tc * (values[i-1, :] - values[i, :] * total_value).sum()
-            total_value = total_value - cost
-        values[i, :] = values[i, :]*total_value
-
-    return df_values.sum(axis=1)
-
-
 def make_track(df_price, df_weight, tc=0):
     """
     :param df_price: a dataframe containing the prices of the underlyings used in the index, columns must be the names
@@ -69,8 +43,8 @@ def make_track(df_price, df_weight, tc=0):
     return pd.Series(index=index, data=value)
 
 
-def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries= (-np.inf, np.inf),
-                   weight_sum = np.nan):
+def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-np.inf, np.inf),
+                   weight_sum=np.nan):
 
     index = df_y.index.copy()
     n, m = df_x.shape
@@ -91,10 +65,12 @@ def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries= (
         cons = ({'type': 'eq',
                  'fun': lambda z: np.sum(z) - weight_sum}) if not np.isnan(weight_sum) else ()
         bounds = [boundaries]*m
-        x0 = np.zeros(m)
-        res = minimize(loss, x0, method='SLSQP', constraints=cons, bounds=bounds)
+        z0 = np.zeros([m, 1])
 
-        df_weight.loc[start] = res.x
+        test = np.dot(x, z0)
+        res = minimize(loss, z0, method='SLSQP', constraints=cons, bounds=bounds)
+
+        df_weight.loc[end] = res.x
 
     return df_weight
 
@@ -115,14 +91,14 @@ if __name__ == "__main__":
     freq = 13
 
     weight = ols_regression(sx5e, bch, sample, freq, boundaries=(0, np.inf), weight_sum=1)
-
     prices_for_track = prices.loc[weight.index[0]:].drop("SX5E", axis=1)
+
     replication = make_track(prices_for_track, weight)
-    replication2 = make_track_gui(prices_for_track, weight)
 
     df_res = prices.loc[weight.index[0]:][["SX5E"]]
     df_res["OLS Rui"] = replication
-    df_res["OLS Gui"] = replication2
+
+    df_res = df_res.bfill()
 
     df_res = df_res / df_res.iloc[0]
 

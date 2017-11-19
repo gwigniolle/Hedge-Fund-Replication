@@ -20,17 +20,18 @@ def make_track(df_price, df_weight, tc=0):
 
     n = len(index)
     shares = (df_weight / df_price).iloc[0]
-
+    cash = 1 - (shares * df_price.iloc[0]).sum() # add cash when weigh_sum <> 1 in ER
     value = np.ones(n)
 
     for i in range(1, len(index)):
 
         if index[i-1] in reweight_index:
             cost = tc * value[i-1] * np.abs(df_weight.loc[index[i-1]] - (shares * df_price.loc[index[i-1]])/value[i-1]).sum()
-            value[i] = (shares * df_price.loc[index[i]]).sum() - cost
+            value[i] = (shares * df_price.loc[index[i]]).sum() - cost + cash
             shares = df_weight.loc[index[i-1]] * value[i] / df_price.loc[index[i]]
+            cash = value[i] - (shares * df_price.loc[index[i]]).sum()
         else: 
-            value[i] = (shares * df_price.loc[index[i]]).sum()
+            value[i] = (shares * df_price.loc[index[i]]).sum() + cash
 
     return pd.Series(index=index, data=value)
 
@@ -68,7 +69,7 @@ def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-
 
 if __name__ == "__main__":
     sns.set()
-    prices = pd.read_csv(r"financial_data/prices.csv", index_col=0)
+    prices = pd.read_csv(r"financial_data/prices.csv", index_col=0, parse_dates=True, dayfirst=True)
     prices.index = pd.DatetimeIndex(prices.index)
 
     mondays = pd.date_range(start=dt.date(2010, 1, 4), end=dt.date.today(), freq='7D')

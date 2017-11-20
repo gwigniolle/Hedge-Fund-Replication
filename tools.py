@@ -6,6 +6,20 @@ import seaborn as sns
 from scipy.optimize import minimize
 
 
+def make_ER(price, rate):
+    dates = price.index
+    price_ER = pd.DataFrame(index=dates, columns=price.columns)
+    price_ER.iloc[0] = 1.
+    n = len(dates)
+
+    rate = rate.reindex(dates).ffill()
+
+    for i in range(1, n):
+        price_ER.iloc[i] = price_ER.iloc[i-1] * (price.iloc[i] / price.iloc[i-1]
+                                                 - rate.loc[dates[i-1]] * (dates[i] - dates[i-1]).days/ 36000.)
+
+    return price_ER
+
 def make_track(df_price, df_weight, tc=0):
     """
     :param df_price: a dataframe containing the prices of the underlyings used in the index, columns must be the names
@@ -17,6 +31,8 @@ def make_track(df_price, df_weight, tc=0):
 
     index = df_price.index
     reweight_index = df_weight.index
+
+    print((index[1]-index[0]).days)
 
     n = len(index)
     shares = (df_weight / df_price).iloc[0]
@@ -33,7 +49,7 @@ def make_track(df_price, df_weight, tc=0):
         else: 
             value[i] = (shares * df_price.loc[index[i]]).sum() + cash
 
-    return pd.Series(index=index, data=value)
+    return pd.DataFrame(index=index, data=value, columns=['Track'])
 
 
 def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-np.inf, np.inf),
@@ -71,6 +87,7 @@ if __name__ == "__main__":
     sns.set()
     prices = pd.read_csv(r"financial_data/prices.csv", index_col=0, parse_dates=True, dayfirst=True)
     prices.index = pd.DatetimeIndex(prices.index)
+    EU_rate = pd.read_csv(r"financial_data/EUR_rates.csv", index_col=0, parse_dates=True, dayfirst=True)['3M']
 
     mondays = pd.date_range(start=dt.date(2010, 1, 4), end=dt.date.today(), freq='7D')
     returns = prices.reindex(mondays).ffill().pct_change().dropna()
@@ -88,9 +105,10 @@ if __name__ == "__main__":
 
     df_res = prices.loc[weight.index[0]:][["SX5E"]]
     df_res["OLS Rui"] = replication
+    df_res["OLS ER"] = make_ER(replication, EU_rate)
 
-    df_res = df_res.bfill()
     df_res = df_res / df_res.iloc[0]
+    df_res = df_res.bfill()
 
     df_res.plot(figsize=(10, 6))
     plt.show()

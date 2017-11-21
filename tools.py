@@ -4,9 +4,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.optimize import minimize
+from scipy import stats
 
 
 def make_ER(price, rate):
+
+    """
+    :param price: pd.DataFrame containing the prices of the ticker
+    :param rate: pd.Series containing the rate prices
+    :return:
+    """
+
     dates = price.index
     price_ER = pd.DataFrame(index=dates, columns=price.columns)
     price_ER.iloc[0] = 1.
@@ -15,9 +23,11 @@ def make_ER(price, rate):
     rate = rate.reindex(dates).ffill()
 
     for i in range(1, n):
-        price_ER.iloc[i] = price_ER.iloc[i-1] * price.iloc[i] / price.iloc[i-1] * (1 - rate.loc[dates[i-1]] * (dates[i] - dates[i-1]).days / 36000.)
+        price_ER.iloc[i] = price_ER.iloc[i-1] * (price.iloc[i] / price.iloc[i-1]
+                                                 - rate.loc[dates[i-1]] * (dates[i] - dates[i-1]).days/ 36000.)
 
     return price_ER
+
 
 def make_track(df_price, df_weight, tc=0):
     """
@@ -30,8 +40,6 @@ def make_track(df_price, df_weight, tc=0):
 
     index = df_price.index
     reweight_index = df_weight.index
-
-    print((index[1]-index[0]).days)
 
     n = len(index)
     shares = (df_weight / df_price).iloc[0]

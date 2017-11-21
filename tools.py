@@ -15,8 +15,7 @@ def make_ER(price, rate):
     rate = rate.reindex(dates).ffill()
 
     for i in range(1, n):
-        price_ER.iloc[i] = price_ER.iloc[i-1] * (price.iloc[i] / price.iloc[i-1]
-                                                 - rate.loc[dates[i-1]] * (dates[i] - dates[i-1]).days/ 36000.)
+        price_ER.iloc[i] = price_ER.iloc[i-1] * price.iloc[i] / price.iloc[i-1] * (1 - rate.loc[dates[i-1]] * (dates[i] - dates[i-1]).days / 36000.)
 
     return price_ER
 
@@ -65,11 +64,13 @@ def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-
         start = index[i*frequency]
         end = index[i*frequency + sample_length]
 
-        x = df_x.loc[start:end].values
-        y = df_y.loc[start:end].values
+        stdx = df_x.loc[start:end].std(axis=0).replace({0 : np.nan})
+        stdy = df_y.loc[start:end].std(axis=0)
+        x = (df_x.loc[start:end] / stdx).fillna(0).values
+        y = (df_y.loc[start:end] / stdy).values
 
         def loss(z):
-            return np.sum(np.square(np.dot(x, z)-y))
+            return np.sum((x * z - y)**2)
 
         cons = ({'type': 'eq',
                  'fun': lambda z: np.sum(z) - weight_sum}) if not np.isnan(weight_sum) else ()
@@ -80,7 +81,84 @@ def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-
 
         df_weight.loc[end] = res.x
 
-    return df_weight
+        df_weight.loc[end] = (df_weight.loc[end] * stdy.iloc[0]) / stdx
+
+    return df_weight.fillna(0)
+
+
+def lasso_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-np.inf, np.inf),
+                     weight_sum=np.nan, l=0.):
+
+    index = df_y.index.copy()
+    n, m = df_x.shape
+
+    df_weight = pd.DataFrame(columns=df_x.columns)
+
+    for i in range((n - sample_length)//frequency):
+
+        start = index[i*frequency]
+        end = index[i*frequency + sample_length]
+
+        stdx = df_x.loc[start:end].std(axis=0).replace({0 : np.nan})
+        stdy = df_y.loc[start:end].std(axis=0)
+        x = (df_x.loc[start:end] / stdx).fillna(0).values
+        y = (df_y.loc[start:end] / stdy).values
+
+
+        def loss(z):
+            return np.sum((x * z - y)**2) + n * l*np.sum(np.abs(z))
+
+        eq = {'type': 'eq', 'fun': lambda z: np.sum(z) - weight_sum}
+
+        cons = (eq) if not np.isnan(weight_sum) else ()
+        bounds = [boundaries]*m
+        z0 = np.zeros([m, 1])
+
+        res = minimize(loss, z0, method='SLSQP', constraints=cons, bounds=bounds)
+
+        df_weight.loc[end] = res.x
+
+        df_weight.loc[end] = df_weight.loc[end] * stdy.iloc[0] / stdx
+
+    return df_weight.fillna(0)
+
+
+def lasso_regression_2(df_y, df_x, sample_length: int, frequency: int, boundaries=(-np.inf, np.inf),
+                     weight_sum=np.nan, l1=0., l2=0.):
+
+    index = df_y.index.copy()
+    n, m = df_x.shape
+
+    df_weight = pd.DataFrame(columns=df_x.columns)
+
+    for i in range((n - sample_length)//frequency):
+
+        start = index[i*frequency]
+        end = index[i*frequency + sample_length]
+
+        stdx = df_x.loc[start:end].std(axis=0).replace({0 : np.nan})
+        stdy = df_y.loc[start:end].std(axis=0)
+        x = (df_x.loc[start:end] / stdx).fillna(0).values
+        y = (df_y.loc[start:end] / stdy).values
+
+
+        def loss(z):
+            return np.sum((x * z - y)**2) + n * l1 * np.sum(np.abs(z))
+
+        eq = {'type': 'eq', 'fun': lambda z: np.sum(z) - weight_sum}
+        ineq = {'type' : 'ineq', 'fun': lambda z: l2 - np.sum(np.abs(z))}
+        cons = (eq, ineq) if not np.isnan(weight_sum) else (ineq)
+        bounds = [boundaries]*m
+        z0 = np.zeros([m, 1])
+
+        res = minimize(loss, z0, method='SLSQP', constraints=cons, bounds=bounds)
+
+        df_weight.loc[end] = res.x
+
+        df_weight.loc[end] = df_weight.loc[end] * stdy.iloc[0] / stdx
+
+    return df_weight.fillna(0)
+
 
 
 if __name__ == "__main__":
@@ -88,7 +166,7 @@ if __name__ == "__main__":
     prices = pd.read_csv(r"financial_data/prices.csv", index_col=0, parse_dates=True, dayfirst=True)
     prices.index = pd.DatetimeIndex(prices.index)
     EU_rate = pd.read_csv(r"financial_data/EUR_rates.csv", index_col=0, parse_dates=True, dayfirst=True)['3M']
-
+    prices = make_ER(prices, EU_rate)
     mondays = pd.date_range(start=dt.date(2010, 1, 4), end=dt.date.today(), freq='7D')
     returns = prices.reindex(mondays).ffill().pct_change().dropna()
 
@@ -99,18 +177,19 @@ if __name__ == "__main__":
     sample = 52
     freq = 13
 
-    weight = ols_regression(sx5e, bch, sample, freq, boundaries=(0, np.inf), weight_sum=1)
+    weight = ols_regression(sx5e, bch, sample, freq, boundaries=(0, np.inf), weight_sum=1.)
+    weight_lasso = lasso_regression(sx5e, bch, sample, freq, boundaries=(0, np.inf), weight_sum=1., l=0.)
+
     prices_for_track = prices.loc[weight.index[0]:].drop("SX5E", axis=1)
     replication = make_track(prices_for_track, weight)
+    replication_lasso = make_track(prices_for_track, weight_lasso)
 
     df_res = prices.loc[weight.index[0]:][["SX5E"]]
-    df_res["OLS Rui"] = replication
-    df_res["OLS ER"] = make_ER(replication, EU_rate)
+    df_res["OLS"] = replication
+    df_res['Lasso'] = replication_lasso
 
     df_res = df_res / df_res.iloc[0]
     df_res = df_res.bfill()
 
     df_res.plot(figsize=(10, 6))
     plt.show()
-
-

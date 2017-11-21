@@ -20,6 +20,7 @@ def make_ER(price, rate):
 
     return price_ER
 
+
 def make_track(df_price, df_weight, tc=0):
     """
     :param df_price: a dataframe containing the prices of the underlyings used in the index, columns must be the names

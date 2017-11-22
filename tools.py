@@ -7,6 +7,7 @@ from scipy.optimize import minimize
 from scipy import stats
 from scipy import stats
 
+
 def make_stats(df_price):
     df_return = df_price.pct_change().dropna()
     stats.describe(df_return)
@@ -88,7 +89,7 @@ def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-
         y = (df_y.loc[start:end] / stdy).values
 
         def loss(z):
-            return np.sum((x * z - y)**2)
+            return np.sum((np.dot(x, z) - y.T)**2)
 
         cons = ({'type': 'eq',
                  'fun': lambda z: np.sum(z) - weight_sum}) if not np.isnan(weight_sum) else ()
@@ -100,6 +101,39 @@ def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-
         df_weight.loc[end] = res.x
 
         df_weight.loc[end] = (df_weight.loc[end] * stdy.iloc[0]) / stdx
+
+    return df_weight.fillna(0)
+
+
+def ols_regression_PR(df_y, df_x, sample_length: int, frequency: int, boundaries=(-np.inf, np.inf),
+                   weight_sum=np.nan):
+
+    index = df_y.index.copy()
+    n, m = df_x.shape
+
+    df_weight = pd.DataFrame(columns=df_x.columns)
+
+    for i in range((n - sample_length)//frequency):
+
+        start = index[i*frequency]
+        end = index[i*frequency + sample_length]
+
+        x = df_x.loc[start:end].values
+        y = df_y.loc[start:end].values
+
+        def loss(z):
+            return np.sum((np.dot(x, z) - y.T)**2)
+
+        cons = ({'type': 'eq',
+                 'fun': lambda z: np.sum(z) - weight_sum}) if not np.isnan(weight_sum) else ()
+        bounds = [boundaries]*m
+        z0 = np.zeros([m, 1])
+
+        res = minimize(loss, z0, method='SLSQP', constraints=cons, bounds=bounds)
+
+        df_weight.loc[end] = res.x
+
+        df_weight.loc[end] = df_weight.loc[end]
 
     return df_weight.fillna(0)
 
@@ -124,7 +158,7 @@ def lasso_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=
 
 
         def loss(z):
-            return np.sum((x * z - y)**2) + n * l*np.sum(np.abs(z))
+            return np.sum((np.dot(x, z) - y.T)**2) + n * l*np.sum(np.abs(z))
 
         eq = {'type': 'eq', 'fun': lambda z: np.sum(z) - weight_sum}
 
@@ -161,10 +195,10 @@ def lasso_regression_2(df_y, df_x, sample_length: int, frequency: int, boundarie
 
 
         def loss(z):
-            return np.sum((x * z - y)**2) + n * l1 * np.sum(np.abs(z))
+            return np.sum((np.dot(x, z) - y)**2) + n * l1 * np.sum(np.abs(z))
 
         eq = {'type': 'eq', 'fun': lambda z: np.sum(z) - weight_sum}
-        ineq = {'type' : 'ineq', 'fun': lambda z: l2 - np.sum(np.abs(z))}
+        ineq = {'type': 'ineq', 'fun': lambda z: l2 - np.sum(np.abs(z))}
         cons = (eq, ineq) if not np.isnan(weight_sum) else (ineq)
         bounds = [boundaries]*m
         z0 = np.zeros([m, 1])

@@ -17,6 +17,19 @@ def make_stats(df_price):
     return stats.describe(df_return),"t test: t = %g  p = %g" % (t_tstat, p_tstat), \
            "KS test: t = %g  p = %g" % (t_KS, p_KS), "KendallTau: t = %g  p = %g" % (tau, p_tau)
 
+def make_FXHedge(df_price, df_fx):
+        dates = df_price.loc[df_fx.index[0]:].index
+        price_fx_hedge = pd.DataFrame(index=dates, columns=df_price.columns)
+        df_fx = df_fx.reindex(dates).ffill()
+        n = len(dates)
+        price_fx_hedge.iloc[0] = 1.
+
+        for i in range(1, n):
+            price_fx_hedge.iloc[i] = price_fx_hedge.iloc[i-1] * (1 + df_price.iloc[i] * df_fx.iloc[i] / df_price.iloc[i-1] / df_fx.iloc[i-1] -
+                                                       df_fx.iloc[i]/df_fx.iloc[i-1]) 
+        return price_fx_hedge
+        
+
 def make_ER(price, rate):
 
     """
@@ -25,7 +38,7 @@ def make_ER(price, rate):
     :return:
     """
 
-    dates = price.index
+    dates = price.loc[rate.index[0]:].index
     price_ER = pd.DataFrame(index=dates, columns=price.columns)
     price_ER.iloc[0] = 1.
     n = len(dates)
@@ -88,7 +101,40 @@ def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-
         y = (df_y.loc[start:end] / stdy).values
 
         def loss(z):
-            return np.sum((x * z - y)**2)
+            return np.sum((np.dot(x, z) - y.T)**2)
+
+        cons = ({'type': 'eq',
+                 'fun': lambda z: np.sum(z * (stdy.iloc[0] / stdx).values) - weight_sum}) if not np.isnan(weight_sum) else ()
+        bounds = [boundaries]*m
+        z0 = np.zeros([m, 1])
+
+        res = minimize(loss, z0, method='SLSQP', constraints=cons, bounds=bounds)
+
+        df_weight.loc[end] = res.x
+
+        df_weight.loc[end] = (df_weight.loc[end] * stdy.iloc[0]) / stdx
+
+    return df_weight.fillna(0)
+
+
+def ols_regression_PR(df_y, df_x, sample_length: int, frequency: int, boundaries=(-np.inf, np.inf),
+                   weight_sum=np.nan):
+
+    index = df_y.index.copy()
+    n, m = df_x.shape
+
+    df_weight = pd.DataFrame(columns=df_x.columns)
+
+    for i in range((n - sample_length)//frequency):
+
+        start = index[i*frequency]
+        end = index[i*frequency + sample_length]
+
+        x = df_x.loc[start:end].values
+        y = df_y.loc[start:end].values
+
+        def loss(z):
+            return np.sum((np.dot(x, z) - y.T)**2)
 
         cons = ({'type': 'eq',
                  'fun': lambda z: np.sum(z) - weight_sum}) if not np.isnan(weight_sum) else ()
@@ -99,7 +145,7 @@ def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-
 
         df_weight.loc[end] = res.x
 
-        df_weight.loc[end] = (df_weight.loc[end] * stdy.iloc[0]) / stdx
+        df_weight.loc[end] = df_weight.loc[end]
 
     return df_weight.fillna(0)
 
@@ -122,13 +168,12 @@ def lasso_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=
         x = (df_x.loc[start:end] / stdx).fillna(0).values
         y = (df_y.loc[start:end] / stdy).values
 
-
         def loss(z):
-            return np.sum((x * z - y)**2) + n * l*np.sum(np.abs(z))
+            return np.sum((np.dot(x, z) - y.T)**2) + l * sample_length * np.sum(np.abs(z))
 
-        eq = {'type': 'eq', 'fun': lambda z: np.sum(z) - weight_sum}
+        cons = ({'type': 'eq',
+                 'fun': lambda z: np.sum(z * (stdy.iloc[0] / stdx).values) - weight_sum}) if not np.isnan(weight_sum) else ()
 
-        cons = (eq) if not np.isnan(weight_sum) else ()
         bounds = [boundaries]*m
         z0 = np.zeros([m, 1])
 
@@ -161,10 +206,10 @@ def lasso_regression_2(df_y, df_x, sample_length: int, frequency: int, boundarie
 
 
         def loss(z):
-            return np.sum((x * z - y)**2) + n * l1 * np.sum(np.abs(z))
+            return np.sum((np.dot(x, z) - y)**2) + l1 * sample_length * np.sum(np.abs(z))
 
         eq = {'type': 'eq', 'fun': lambda z: np.sum(z) - weight_sum}
-        ineq = {'type' : 'ineq', 'fun': lambda z: l2 - np.sum(np.abs(z))}
+        ineq = {'type': 'ineq', 'fun': lambda z: l2 - np.sum(np.abs(z))}
         cons = (eq, ineq) if not np.isnan(weight_sum) else (ineq)
         bounds = [boundaries]*m
         z0 = np.zeros([m, 1])
@@ -176,6 +221,43 @@ def lasso_regression_2(df_y, df_x, sample_length: int, frequency: int, boundarie
         df_weight.loc[end] = df_weight.loc[end] * stdy.iloc[0] / stdx
 
     return df_weight.fillna(0)
+
+
+def ridge_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-np.inf, np.inf),
+                     weight_sum=np.nan, l=0.):
+
+    index = df_y.index.copy()
+    n, m = df_x.shape
+
+    df_weight = pd.DataFrame(columns=df_x.columns)
+
+    for i in range((n - sample_length)//frequency):
+
+        start = index[i*frequency]
+        end = index[i*frequency + sample_length]
+
+        stdx = df_x.loc[start:end].std(axis=0).replace({0 : np.nan})
+        stdy = df_y.loc[start:end].std(axis=0)
+        x = (df_x.loc[start:end] / stdx).fillna(0).values
+        y = (df_y.loc[start:end] / stdy).values
+
+        def loss(z):
+            return np.sum((np.dot(x, z) - y.T)**2) + l * sample_length * np.sum(z**2)
+
+        cons = ({'type': 'eq',
+                 'fun': lambda z: np.sum(z * (stdy.iloc[0] / stdx).values) - weight_sum}) if not np.isnan(weight_sum) else ()
+
+        bounds = [boundaries]*m
+        z0 = np.zeros([m, 1])
+
+        res = minimize(loss, z0, method='SLSQP', constraints=cons, bounds=bounds)
+
+        df_weight.loc[end] = res.x
+
+        df_weight.loc[end] = df_weight.loc[end] * stdy.iloc[0] / stdx
+
+    return df_weight.fillna(0)
+
 
 
 
@@ -195,19 +277,21 @@ if __name__ == "__main__":
     sample = 52
     freq = 13
 
-    weight = ols_regression(sx5e, bch, sample, freq, boundaries=(0, np.inf), weight_sum=1.)
-    weight_lasso = lasso_regression(sx5e, bch, sample, freq, boundaries=(0, np.inf), weight_sum=1., l=0.)
-
+    weight = ols_regression(sx5e, bch, sample, freq, boundaries=(0, np.inf), weight_sum=np.nan)
     prices_for_track = prices.loc[weight.index[0]:].drop("SX5E", axis=1)
     replication = make_track(prices_for_track, weight)
-    replication_lasso = make_track(prices_for_track, weight_lasso)
 
     df_res = prices.loc[weight.index[0]:][["SX5E"]]
     df_res["OLS"] = replication
-    df_res['Lasso'] = replication_lasso
+
+    for l in [0.05, 0.1, 0.2, 0.25]:
+        weight_lasso = lasso_regression(sx5e, bch, sample, freq, boundaries=(0, np.inf), weight_sum=np.nan, l=l)
+        replication_lasso = make_track(prices_for_track, weight_lasso)
+        df_res[('Lasso : lambda = '+str(l))] = replication_lasso
 
     df_res = df_res / df_res.iloc[0]
     df_res = df_res.bfill()
 
     df_res.plot(figsize=(10, 6))
+    plt.gca().set_ylim(bottom=0)
     plt.show()

@@ -169,8 +169,7 @@ def lasso_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=
         y = (df_y.loc[start:end] / stdy).values
 
         def loss(z):
-            return np.sum((np.dot(x, z) - y.T)**2) + l * sample_length * np.sum(np.abs(z))
-
+            return np.sum((np.dot(x, z) - y.T)**2) + l * sample_length * np.sum(np.abs(z)) / (stdy ** 2)
         cons = ({'type': 'eq',
                  'fun': lambda z: np.sum(z * (stdy.iloc[0] / stdx).values) - weight_sum}) if not np.isnan(weight_sum) else ()
 
@@ -206,7 +205,7 @@ def lasso_regression_2(df_y, df_x, sample_length: int, frequency: int, boundarie
 
 
         def loss(z):
-            return np.sum((np.dot(x, z) - y)**2) + l1 * sample_length * np.sum(np.abs(z))
+            return np.sum((np.dot(x, z) - y)**2) + l1 * sample_length * np.sum(np.abs(z)) / (stdy ** 2)
 
         eq = {'type': 'eq', 'fun': lambda z: np.sum(z) - weight_sum}
         ineq = {'type': 'ineq', 'fun': lambda z: l2 - np.sum(np.abs(z))}
@@ -242,7 +241,7 @@ def ridge_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=
         y = (df_y.loc[start:end] / stdy).values
 
         def loss(z):
-            return np.sum((np.dot(x, z) - y.T)**2) + l * sample_length * np.sum(z**2)
+            return np.sum((np.dot(x, z) - y.T)**2) + l * sample_length * np.sum(z**2) / (stdy ** 2)
 
         cons = ({'type': 'eq',
                  'fun': lambda z: np.sum(z * (stdy.iloc[0] / stdx).values) - weight_sum}) if not np.isnan(weight_sum) else ()

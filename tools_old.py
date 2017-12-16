@@ -6,7 +6,6 @@ import seaborn as sns
 from scipy.optimize import minimize
 from scipy import stats
 
-
 def make_stats(df_price):
     df_return = df_price.pct_change().dropna()
     stats.describe(df_return)
@@ -16,7 +15,6 @@ def make_stats(df_price):
 
     return stats.describe(df_return),"t test: t = %g  p = %g" % (t_tstat, p_tstat), \
            "KS test: t = %g  p = %g" % (t_KS, p_KS), "KendallTau: t = %g  p = %g" % (tau, p_tau)
-
 
 def make_FXHedge(df_price, df_fx):
         dates = df_price.loc[df_fx.index[0]:].index
@@ -83,7 +81,43 @@ def make_track(df_price, df_weight, tc=0):
     return pd.DataFrame(index=index, data=value, columns=['Track'])
 
 
-def ols_regression(df_y, df_x, sample_length: int, frequency: int):
+def ols_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-np.inf, np.inf),
+                   weight_sum=np.nan):
+
+    index = df_y.index.copy()
+    n, m = df_x.shape
+
+    df_weight = pd.DataFrame(columns=df_x.columns)
+
+    for i in range((n - sample_length)//frequency):
+
+        start = index[i*frequency]
+        end = index[i*frequency + sample_length - 1]
+
+        stdx = df_x.loc[start:end].std(axis=0).replace({0 : np.nan})
+        stdy = df_y.loc[start:end].std(axis=0)
+        x = (df_x.loc[start:end] / stdx).fillna(0).values
+        y = (df_y.loc[start:end] / stdy).values
+
+        def loss(z):
+            return np.sum((np.dot(x, z) - y.T)**2)
+
+        cons = ({'type': 'eq',
+                 'fun': lambda z: np.sum(z * (stdy.iloc[0] / stdx).values) - weight_sum}) if not np.isnan(weight_sum) else ()
+        bounds = [boundaries]*m
+        z0 = np.zeros([m, 1])
+
+        res = minimize(loss, z0, method='SLSQP', constraints=cons, bounds=bounds)
+
+        df_weight.loc[end] = res.x
+
+        df_weight.loc[end] = (df_weight.loc[end] * stdy.iloc[0]) / stdx
+
+    return df_weight.fillna(0)
+
+
+def ols_regression_PR(df_y, df_x, sample_length: int, frequency: int, boundaries=(-np.inf, np.inf),
+                   weight_sum=np.nan):
 
     index = df_y.index.copy()
     n, m = df_x.shape
@@ -98,17 +132,29 @@ def ols_regression(df_y, df_x, sample_length: int, frequency: int):
         x = df_x.loc[start:end].values
         y = df_y.loc[start:end].values
 
-        weight = np.dot(np.dot(np.linalg.inv(np.dot(x.T, x)), x.T), y)
+        def loss(z):
+            return np.sum((np.dot(x, z) - y.T)**2)
 
-        df_weight.loc[end] = weight[:,0].T
+        cons = ({'type': 'eq',
+                 'fun': lambda z: np.sum(z) - weight_sum}) if not np.isnan(weight_sum) else ()
+        bounds = [boundaries]*m
+        z0 = np.zeros([m, 1])
+
+        res = minimize(loss, z0, method='SLSQP', constraints=cons, bounds=bounds)
+
+        df_weight.loc[end] = res.x
+
+        df_weight.loc[end] = df_weight.loc[end]
 
     return df_weight.fillna(0)
 
 
-def lasso_regression(df_y, df_x, sample_length: int, frequency: int, l=0.):
+def lasso_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-np.inf, np.inf),
+                     weight_sum=np.nan, l=0.):
 
     index = df_y.index.copy()
     n, m = df_x.shape
+
     df_weight = pd.DataFrame(columns=df_x.columns)
 
     for i in range((n - sample_length)//frequency):
@@ -123,20 +169,27 @@ def lasso_regression(df_y, df_x, sample_length: int, frequency: int, l=0.):
 
         def loss(z):
             return np.sum((np.dot(x, z) - y.T)**2) + l * sample_length * np.sum(np.abs(z)) / (stdy ** 2)
+        cons = ({'type': 'eq',
+                 'fun': lambda z: np.sum(z * (stdy.iloc[0] / stdx).values) - weight_sum}) if not np.isnan(weight_sum) else ()
 
-        res = minimize(loss, np.zeros([m, 1]), method='SLSQP')
+        bounds = [boundaries]*m
+        z0 = np.zeros([m, 1])
+
+        res = minimize(loss, z0, method='SLSQP', constraints=cons, bounds=bounds)
 
         df_weight.loc[end] = res.x
+
         df_weight.loc[end] = df_weight.loc[end] * stdy.iloc[0] / stdx
 
     return df_weight.fillna(0)
 
 
-def ridge_regression(df_y, df_x, sample_length: int, frequency: int, l=0.):
+def ridge_regression(df_y, df_x, sample_length: int, frequency: int, boundaries=(-np.inf, np.inf),
+                     weight_sum=np.nan, l=0.):
 
     index = df_y.index.copy()
     n, m = df_x.shape
-    I = np.eye(m)
+
     df_weight = pd.DataFrame(columns=df_x.columns)
 
     for i in range((n - sample_length)//frequency):
@@ -149,51 +202,22 @@ def ridge_regression(df_y, df_x, sample_length: int, frequency: int, l=0.):
         x = (df_x.loc[start:end] / stdx).fillna(0).values
         y = (df_y.loc[start:end] / stdy).values
 
-        l1 = l * sample_length / (np.float(m) * (stdy.iloc[0] ** 2))
-        weight = np.dot(np.dot(np.linalg.inv(np.dot(x.T, x) + l1 * I), x.T), y)
+        def loss(z):
+            return np.sum((np.dot(x, z) - y.T)**2) + l * (sample_length / np.float(m)) * np.sum(z**2) / (stdy ** 2)
 
-        df_weight.loc[end] = weight[:, 0].T
+        cons = ({'type': 'eq',
+                 'fun': lambda z: np.sum(z * (stdy.iloc[0] / stdx).values) - weight_sum}) if not np.isnan(weight_sum) else ()
+
+        bounds = [boundaries]*m
+        z0 = np.zeros([m, 1])
+
+        res = minimize(loss, z0, method='SLSQP', constraints=cons, bounds=bounds)
+
+        df_weight.loc[end] = res.x
+
         df_weight.loc[end] = df_weight.loc[end] * stdy.iloc[0] / stdx
 
     return df_weight.fillna(0)
-
-
-def kalman_filter(df_y, df_x, frequency: int, sigma_weight, sigma_return):
-
-    index = df_y.index.copy()
-    n, m = df_x.shape
-
-    cov_weight = sigma_weight * np.eye(m)
-    cov_return = sigma_return * np.eye(frequency)
-    df_weight = pd.DataFrame(columns=df_x.columns)
-
-    weight_filter = np.zeros([m, 1])
-    cov_filter = np.zeros([m, m])
-
-    I = np.eye(m)
-
-    for i in range((n - frequency)//frequency):
-
-        start = index[i*frequency]
-        end = index[(i + 1)*frequency - 1]
-
-        x = df_x.loc[start:end].values
-        y = df_y.loc[start:end].values
-
-        weight_forecast = weight_filter
-        cov_forecast = cov_filter + cov_weight
-
-        temp = np.dot(cov_forecast, x.T)
-        inv = np.linalg.inv(np.dot(x, temp) + cov_return)
-        K = np.dot(temp, inv)
-
-        weight_filter = weight_forecast + np.dot(K, y - np.dot(x, weight_forecast))
-        cov_filter = np.dot(I - np.dot(K, x), cov_forecast)
-
-        df_weight.loc[end] = weight_filter[:, 0].T
-
-    return df_weight.fillna(0)
-
 
 
 if __name__ == "__main__":

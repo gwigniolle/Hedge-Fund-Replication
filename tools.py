@@ -90,7 +90,7 @@ def ols_regression(df_y, df_x, sample_length: int, frequency: int):
 
     df_weight = pd.DataFrame(columns=df_x.columns)
 
-    for i in range((n - sample_length)//frequency):
+    for i in range((n - sample_length)//frequency + 1):
 
         start = index[i*frequency]
         end = index[i*frequency + sample_length - 1]
@@ -111,7 +111,7 @@ def lasso_regression(df_y, df_x, sample_length: int, frequency: int, l=0.):
     n, m = df_x.shape
     df_weight = pd.DataFrame(columns=df_x.columns)
 
-    for i in range((n - sample_length)//frequency):
+    for i in range((n - sample_length)//frequency + 1):
 
         start = index[i*frequency]
         end = index[i*frequency + sample_length - 1]
@@ -139,7 +139,7 @@ def ridge_regression(df_y, df_x, sample_length: int, frequency: int, l=0.):
     I = np.eye(m)
     df_weight = pd.DataFrame(columns=df_x.columns)
 
-    for i in range((n - sample_length)//frequency):
+    for i in range((n - sample_length)//frequency + 1):
 
         start = index[i*frequency]
         end = index[i*frequency + sample_length - 1]
@@ -172,7 +172,7 @@ def kalman_filter(df_y, df_x, frequency: int, sigma_weight, sigma_return):
 
     I = np.eye(m)
 
-    for i in range((n - frequency)//frequency):
+    for i in range((n - frequency)//frequency + 1):
 
         start = index[i*frequency]
         end = index[(i + 1)*frequency - 1]

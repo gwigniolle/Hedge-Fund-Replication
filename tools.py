@@ -187,7 +187,7 @@ def kalman_filter(df_y, df_x, frequency: int, sigma_weight, sigma_return):
         inv = np.linalg.inv(np.dot(x, temp) + cov_return)
         K = np.dot(temp, inv)
 
-        weight_filter = weight_forecast + np.dot(K, y - np.dot(x, weight_forecast))
+        weight_filter = (weight_forecast + np.dot(K, y - np.dot(x, weight_forecast)))
         cov_filter = np.dot(I - np.dot(K, x), cov_forecast)
 
         df_weight.loc[end] = weight_filter[:, 0].T

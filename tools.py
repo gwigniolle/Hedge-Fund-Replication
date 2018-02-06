@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.optimize import minimize
 from scipy import stats
+from sklearn.linear_model import Lasso
 
 
 def make_stats(df_price):
@@ -120,13 +121,11 @@ def lasso_regression(df_y, df_x, sample_length: int, frequency: int, l=0.):
         stdy = df_y.loc[start:end].std(axis=0)
         x = (df_x.loc[start:end] / stdx).fillna(0).values
         y = (df_y.loc[start:end] / stdy).values
-
-        def loss(z):
-            return np.sum((np.dot(x, z) - y.T)**2) + l * sample_length * np.sum(np.abs(z)) / (stdy ** 2)
-
-        res = minimize(loss, np.zeros([m, 1]), method='SLSQP')
-
-        df_weight.loc[end] = res.x
+        
+        las = Lasso(alpha = l / (2. * (stdy.iloc[0] ** 2)), fit_intercept=False, normalize=False)
+        las.fit(x, y)
+        
+        df_weight.loc[end] = las.coef_
         df_weight.loc[end] = df_weight.loc[end] * stdy.iloc[0] / stdx
 
     return df_weight.fillna(0)
@@ -163,8 +162,8 @@ def kalman_filter(df_y, df_x, frequency: int, sigma_weight, sigma_return):
     index = df_y.index.copy()
     n, m = df_x.shape
 
-    cov_weight = sigma_weight * np.eye(m)
-    cov_return = sigma_return * np.eye(frequency)
+    cov_weight = (sigma_weight ** 2) * np.eye(m)
+    cov_return = (sigma_return ** 2) * np.eye(frequency)
     df_weight = pd.DataFrame(columns=df_x.columns)
 
     weight_filter = np.zeros([m, 1])

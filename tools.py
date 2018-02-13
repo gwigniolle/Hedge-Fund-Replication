@@ -20,16 +20,22 @@ def make_stats(df_price):
 
 
 def make_FXHedge(df_price, df_fx):
-        dates = df_price.loc[df_fx.index[0]:].index
-        price_fx_hedge = pd.DataFrame(index=dates, columns=df_price.columns)
-        df_fx = df_fx.reindex(dates).ffill()
-        n = len(dates)
-        price_fx_hedge.iloc[0] = 1.
+    """
+    prices need to be in ER
+    :param df_price:
+    :param df_fx:
+    :return:
+    """
+    dates = df_price.loc[df_fx.index[0]:].index
+    price_fx_hedge = pd.DataFrame(index=dates, columns=df_price.columns)
+    df_fx = df_fx.reindex(dates).ffill()
+    n = len(dates)
+    price_fx_hedge.iloc[0] = 1.
 
-        for i in range(1, n):
-            price_fx_hedge.iloc[i] = price_fx_hedge.iloc[i-1] * (1 + df_price.iloc[i] * df_fx.iloc[i] / (df_price.iloc[i-1] * df_fx.iloc[i-1]) -
-                                                       df_fx.iloc[i]/df_fx.iloc[i-1]) 
-        return price_fx_hedge
+    for i in range(1, n):
+        price_fx_hedge.iloc[i] = price_fx_hedge.iloc[i-1] * (1 + df_price.iloc[i] * df_fx.iloc[i] / (df_price.iloc[i-1] * df_fx.iloc[i-1]) -
+                                                   df_fx.iloc[i]/df_fx.iloc[i-1])
+    return price_fx_hedge
         
 
 def make_ER(price, rate):

@@ -36,7 +36,7 @@ def make_FXHedge(df_price: pd.DataFrame, df_fx: pd.Series):
     return price_fx_hedge
         
 
-def make_ER(price: pd.DataFrame, rate: pd.Series):
+def make_ER(price: pd.DataFrame, rate):
 
     """
     :param price: pd.DataFrame containing the prices of the ticker
@@ -58,7 +58,7 @@ def make_ER(price: pd.DataFrame, rate: pd.Series):
     return price_ER
 
 
-def make_track(df_price: pd.DataFrame, df_weight: pd.DataFrame, tc=0):
+def make_track(df_price: pd.DataFrame, df_weight: pd.DataFrame, tc=0, lag=1):
     """
     :param df_price: a dataframe containing the prices of the underlyings used in the index, columns must be the names
     and the index are the dates
@@ -77,10 +77,11 @@ def make_track(df_price: pd.DataFrame, df_weight: pd.DataFrame, tc=0):
 
     for i in range(1, len(index)):
 
-        if index[i-1] in reweight_index:
-            cost = tc * value[i-1] * np.abs(df_weight.loc[index[i-1]] - (shares * df_price.loc[index[i-1]])/value[i-1]).sum()
-            value[i] = (shares * df_price.loc[index[i]]).sum() - cost + cash
-            shares = df_weight.loc[index[i-1]] * value[i] / df_price.loc[index[i]]
+        if index[i-lag] in reweight_index:
+            value[i] = (shares * df_price.loc[index[i]]).sum() + cash
+            cost = tc * value[i] * np.abs(df_weight.loc[index[i-lag]] - (shares * df_price.loc[index[i]])/value[i]).sum()
+            value[i] = value[i] - cost
+            shares = df_weight.loc[index[i-lag]] * value[i] / df_price.loc[index[i]]
             cash = value[i] - (shares * df_price.loc[index[i]]).sum()
         else: 
             value[i] = (shares * df_price.loc[index[i]]).sum() + cash
@@ -121,7 +122,7 @@ def lasso_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
         start = index[i*frequency]
         end = index[i*frequency + sample_length - 1]
 
-        stdx = df_x.loc[start:end].std(axis=0).replace({0 : np.nan})
+        stdx = df_x.loc[start:end].std(axis=0, skipna=False).replace({0 : np.nan})
         stdy = df_y.loc[start:end].std(axis=0)
         x = (df_x.loc[start:end] / stdx).fillna(0).values
         y = (df_y.loc[start:end] / stdy).values
@@ -147,7 +148,7 @@ def lasso_regression_ic(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: i
         start = index[i * frequency]
         end = index[i * frequency + sample_length - 1]
 
-        stdx = df_x.loc[start:end].std(axis=0).replace({0: np.nan})
+        stdx = df_x.loc[start:end].std(axis=0, skipna=False).replace({0: np.nan})
         stdy = df_y.loc[start:end].std(axis=0)
         x = (df_x.loc[start:end] / stdx).fillna(0).values
         y = (df_y.loc[start:end] / stdy).values
@@ -179,7 +180,7 @@ def ridge_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
         start = index[i*frequency]
         end = index[i*frequency + sample_length - 1]
 
-        stdx = df_x.loc[start:end].std(axis=0).replace({0 : np.nan})
+        stdx = df_x.loc[start:end].std(axis=0, skipna=False).replace({0 : np.nan})
         stdy = df_y.loc[start:end].std(axis=0)
         x = (df_x.loc[start:end] / stdx).fillna(0).values
         y = (df_y.loc[start:end] / stdy).values

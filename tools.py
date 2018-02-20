@@ -243,12 +243,15 @@ def kalman_with_selection(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length:
     for date in index:
         selection = df_weight_lasso.loc[date] != 0.0
         selection = list(selection[selection].index)
-        i = df_x.index.get_loc(date)
-        df_x_ = df_x[selection].iloc[i-nb_period+1: i+1]
-        df_y_ = df_y.loc[df_x_.index]
-        kalman = kalman_filter(df_y=df_y_, df_x=df_x_, frequency=1, sigma_weight=1.,
-                               sigma_return=nu, weight_init=df_weight_lasso.loc[date, selection])
-        df_weight.loc[date, selection] = kalman.loc[date]
+        if not selection:
+            df_weight.loc[date, :] = 0
+        else:
+            i = df_x.index.get_loc(date)
+            df_x_ = df_x[selection].iloc[i-nb_period+1: i+1]
+            df_y_ = df_y.loc[df_x_.index]
+            kalman = kalman_filter(df_y=df_y_, df_x=df_x_, frequency=1, sigma_weight=1.,
+                                   sigma_return=nu, weight_init=df_weight_lasso.loc[date, selection])
+            df_weight.loc[date, selection] = kalman.loc[date]
 
     return df_weight.fillna(0.0)
 

@@ -127,7 +127,7 @@ def lasso_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
         x = (df_x.loc[start:end] / stdx).fillna(0).values
         y = (df_y.loc[start:end] / stdy).values
         
-        las = Lasso(alpha = l / (2. * (stdy.iloc[0] ** 2)), fit_intercept=False, normalize=False)
+        las = Lasso(alpha=l / (2. * (stdy.iloc[0] ** 2)), fit_intercept=False, normalize=False)
         las.fit(x, y)
         
         df_weight.loc[end] = las.coef_
@@ -194,7 +194,8 @@ def ridge_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
     return df_weight.fillna(0)
 
 
-def kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, sigma_weight: float, sigma_return: float):
+def kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, sigma_weight: float,
+                  sigma_return: float, weight_filter=None):
 
     index = df_y.index.copy()
     n, m = df_x.shape
@@ -202,8 +203,7 @@ def kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, sigma_
     cov_weight = (sigma_weight ** 2) * np.eye(m)
     cov_return = (sigma_return ** 2) * np.eye(frequency)
     df_weight = pd.DataFrame(columns=df_x.columns)
-
-    weight_filter = np.zeros([m, 1])
+    if not weight_filter: weight_filter = np.zeros([m, 1])
     cov_filter = np.zeros([m, m])
 
     I = np.eye(m)
@@ -229,3 +229,48 @@ def kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, sigma_
         df_weight.loc[end] = weight_filter[:, 0].T
 
     return df_weight.fillna(0)
+
+
+def kalman_with_selection(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, frequency: int,
+                          nu: float, nb_period: int, criterion: str):
+
+    df_weight_lasso, _ = lasso_regression_ic(df_y, df_x, sample_length, frequency, criterion, plot_lambda=False)
+    df_weight = pd.DataFrame(columns=df_x.columns)
+    index = df_weight_lasso.index.copy()
+
+    for date in index:
+        selection = df_weight_lasso.loc[date] != 0.0
+        selection = list(selection[selection].index)
+        i = df_x.index.get_loc(date)
+        df_x_ = df_x[selection].iloc[i-nb_period*frequency+1: i+1]
+        df_y_ = df_y.loc[df_x_.index]
+        kalman = kalman_filter(df_y=df_y_, df_x=df_x_, frequency=frequency, sigma_weight=1,
+                               sigma_return=nu)
+        df_weight.loc[date, selection] = kalman.loc[date]
+
+    return df_weight.fillna(0.0)
+
+
+if __name__ == "__main__":
+
+    fund_name = 'HFRXMD'
+    US_rate = pd.read_csv(r"financial_data/USD_rates.csv", index_col=0, parse_dates=True, dayfirst=True)['3M']
+
+    hfrx_all = pd.read_csv(r"financial_data/hfrx_daily_index_data.csv", index_col=0, parse_dates=True,
+                           dayfirst=True).ffill()
+    hfrx = make_ER(hfrx_all[[fund_name]].dropna(), US_rate)
+
+    bnp = pd.read_csv(r"financial_data/bnp_data.csv", index_col=0, parse_dates=True, dayfirst=True)
+    risk_premia = pd.read_pickle("financial_data/risk_premia_ER_FX_USD.pkl")
+
+    prices_all = bnp.join(risk_premia, how="outer").ffill().join(hfrx, how="inner")
+    returns_all = prices_all.resample('1D').first().pct_change().dropna()
+    hrfx_returns = returns_all[[fund_name]]
+    returns_all = returns_all.drop(fund_name, axis=1)
+    size = 126
+    freq = 5
+    tc = 0.001
+    lag = 1
+
+    df_weight_skalman = kalman_with_selection(hrfx_returns, returns_all, sample_length=size, frequency=freq,
+                                              nu=0.02, nb_period=20, criterion='bic')

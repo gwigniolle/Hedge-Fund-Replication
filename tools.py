@@ -195,7 +195,7 @@ def ridge_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
 
 
 def kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, sigma_weight: float,
-                  sigma_return: float, weight_filter=None):
+                  sigma_return: float, weight_init=0):
 
     index = df_y.index.copy()
     n, m = df_x.shape
@@ -203,7 +203,10 @@ def kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, sigma_
     cov_weight = (sigma_weight ** 2) * np.eye(m)
     cov_return = (sigma_return ** 2) * np.eye(frequency)
     df_weight = pd.DataFrame(columns=df_x.columns)
-    if not weight_filter: weight_filter = np.zeros([m, 1])
+
+    try: weight_filter = np.array(weight_init.values).reshape(m, 1)
+    except: weight_filter = np.zeros([m, 1])
+
     cov_filter = np.zeros([m, m])
 
     I = np.eye(m)
@@ -216,14 +219,13 @@ def kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, sigma_
         x = df_x.loc[start:end].values
         y = df_y.loc[start:end].values
 
-        weight_forecast = weight_filter
         cov_forecast = cov_filter + cov_weight
 
         temp = np.dot(cov_forecast, x.T)
         inv = np.linalg.inv(np.dot(x, temp) + cov_return)
         K = np.dot(temp, inv)
 
-        weight_filter = (weight_forecast + np.dot(K, y - np.dot(x, weight_forecast)))
+        weight_filter = (weight_filter + np.dot(K, y - np.dot(x, weight_filter)))
         cov_filter = np.dot(I - np.dot(K, x), cov_forecast)
 
         df_weight.loc[end] = weight_filter[:, 0].T
@@ -242,10 +244,10 @@ def kalman_with_selection(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length:
         selection = df_weight_lasso.loc[date] != 0.0
         selection = list(selection[selection].index)
         i = df_x.index.get_loc(date)
-        df_x_ = df_x[selection].iloc[i-nb_period*frequency+1: i+1]
+        df_x_ = df_x[selection].iloc[i-nb_period+1: i+1]
         df_y_ = df_y.loc[df_x_.index]
-        kalman = kalman_filter(df_y=df_y_, df_x=df_x_, frequency=frequency, sigma_weight=1,
-                               sigma_return=nu)
+        kalman = kalman_filter(df_y=df_y_, df_x=df_x_, frequency=1, sigma_weight=1.,
+                               sigma_return=nu, weight_init=df_weight_lasso.loc[date, selection])
         df_weight.loc[date, selection] = kalman.loc[date]
 
     return df_weight.fillna(0.0)
@@ -274,3 +276,5 @@ if __name__ == "__main__":
 
     df_weight_skalman = kalman_with_selection(hrfx_returns, returns_all, sample_length=size, frequency=freq,
                                               nu=0.02, nb_period=20, criterion='bic')
+
+    print(df_weight_skalman.head())

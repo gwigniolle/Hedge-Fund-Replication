@@ -6,7 +6,7 @@ from scipy import stats
 from sklearn.linear_model import Lasso, LassoLarsIC
 
 
-def make_stats(df_price: pd.DataFrame):
+def make_stats_maxence(df_price: pd.DataFrame):
     df_return = df_price.pct_change().dropna()
     stats.describe(df_return)
     t_tstat, p_tstat = stats.ttest_rel(df_return.iloc[:,0], df_return.iloc[:, 1])  # T-test
@@ -15,6 +15,24 @@ def make_stats(df_price: pd.DataFrame):
 
     return stats.describe(df_return),"t test: t = %g  p = %g" % (t_tstat, p_tstat), \
            "KS test: t = %g  p = %g" % (t_KS, p_KS), "KendallTau: t = %g  p = %g" % (tau, p_tau)
+
+
+def replication_stats(df_price: pd.DataFrame, fund_name: str):
+
+    rho = df_price.pct_change().corr(method="pearson")
+    tau = df_price.pct_change().corr(method="kendall")
+
+    returns_track = df_price.pct_change().dropna()
+    returns_fund = df_price[fund_name].pct_change().dropna()
+
+    df = pd.DataFrame()
+    df['Tracking error'] = (returns_track.T - returns_fund.values).std(axis=1)
+    df['R-squared'] = 1 - (returns_track.T - returns_fund.values).var(axis=1) / returns_fund.values.var()
+    df['Sharpe ratio'] = np.sqrt(252) * returns_track.mean() / returns_track.std()
+    df['Annual Return'] = (df_price.iloc[-1] / df_price.iloc[0]) ** (252 / len(df_price.index)) - 1
+    df['Correlation'] = rho[fund_name]
+    df['Kendall tau'] = tau[fund_name]
+    return df
 
 
 def make_FXHedge(df_price: pd.DataFrame, df_fx: pd.Series):
@@ -160,12 +178,15 @@ def lasso_regression_ic(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: i
         df_weight.loc[end] = las.coef_
         df_weight.loc[end] = df_weight.loc[end] * stdy.iloc[0] / stdx
 
+    df_weight = df_weight.fillna(0)
     if plot_lambda:
+        fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(16, 5))
         sns.set()
-        df_lambda['$\lambda$'].plot(title="$\lambda$ parameter selected by the " + criterion.upper())
+        df_lambda['$\lambda$'].plot(title="$\lambda$ parameter selected by the " + criterion.upper(), ax=axes[0])
+        (df_weight != 0).sum(axis=1).plot(title="Number of selected factors by the " + criterion.upper(), ax=axes[1])
         plt.show()
 
-    return df_weight.fillna(0), df_lambda
+    return df_weight, df_lambda
 
 
 def ridge_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, frequency: int, l=0.):

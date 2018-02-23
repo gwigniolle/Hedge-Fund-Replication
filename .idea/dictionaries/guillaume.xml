@@ -2,10 +2,15 @@
   <dictionary name="guillaume">
     <words>
       <w>dataframe</w>
+      <w>hfrx</w>
+      <w>hfrxmd</w>
+      <w>hrfx</w>
       <w>jupyter</w>
       <w>positioner</w>
+      <w>premia</w>
       <w>rebalancing</w>
       <w>reweight</w>
+      <w>skalman</w>
       <w>underlyings</w>
     </words>
   </dictionary>

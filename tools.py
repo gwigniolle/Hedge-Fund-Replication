@@ -6,15 +6,33 @@ from scipy import stats
 from sklearn.linear_model import Lasso, LassoLarsIC
 
 
-def make_stats(df_price: pd.DataFrame):
+def make_stats_maxence(df_price: pd.DataFrame):
     df_return = df_price.pct_change().dropna()
     stats.describe(df_return)
     t_tstat, p_tstat = stats.ttest_rel(df_return.iloc[:,0], df_return.iloc[:, 1])  # T-test
     t_KS, p_KS = stats.ks_2samp(df_return.iloc[:,0], df_return.iloc[:, 1])  # KS -> p petit pas la meme distri
     tau, p_tau = stats.kendalltau(df_return.iloc[:,0], df_return.iloc[:, 1])  # Tau de Kendall
 
-    return stats.describe(df_return),"t test: t = %g  p = %g" % (t_tstat, p_tstat), \
-           "KS test: t = %g  p = %g" % (t_KS, p_KS), "KendallTau: t = %g  p = %g" % (tau, p_tau)
+    return stats.describe(df_return), "t test: t = %g  p = %g" % (t_tstat, p_tstat), \
+        "KS test: t = %g  p = %g" % (t_KS, p_KS), "KendallTau: t = %g  p = %g" % (tau, p_tau)
+
+
+def replication_stats(df_price: pd.DataFrame, fund_name: str):
+
+    rho = df_price.pct_change().corr(method="pearson")
+    tau = df_price.pct_change().corr(method="kendall")
+
+    returns_track = df_price.pct_change().dropna()
+    returns_fund = df_price[fund_name].pct_change().dropna()
+
+    df = pd.DataFrame()
+    df['Tracking error'] = (returns_track.T - returns_fund.values).std(axis=1)
+    df['R-squared'] = 1 - (returns_track.T - returns_fund.values).var(axis=1) / returns_fund.values.var()
+    df['Sharpe ratio'] = np.sqrt(252) * returns_track.mean() / returns_track.std()
+    df['Annual Return'] = (df_price.iloc[-1] / df_price.iloc[0]) ** (252 / len(df_price.index)) - 1
+    df['Correlation'] = rho[fund_name]
+    df['Kendall tau'] = tau[fund_name]
+    return df
 
 
 def make_FXHedge(df_price: pd.DataFrame, df_fx: pd.Series):
@@ -31,8 +49,9 @@ def make_FXHedge(df_price: pd.DataFrame, df_fx: pd.Series):
     price_fx_hedge.iloc[0] = 1.
 
     for i in range(1, n):
-        price_fx_hedge.iloc[i] = price_fx_hedge.iloc[i-1] * (1 + df_price.iloc[i] * df_fx.iloc[i] / (df_price.iloc[i-1] * df_fx.iloc[i-1]) -
-                                                   df_fx.iloc[i]/df_fx.iloc[i-1])
+        price_fx_hedge.iloc[i] = price_fx_hedge.iloc[i-1] * (1 + df_price.iloc[i] * df_fx.iloc[i] /
+                                                             (df_price.iloc[i-1] * df_fx.iloc[i-1])
+                                                             - df_fx.iloc[i] / df_fx.iloc[i-1])
     return price_fx_hedge
         
 
@@ -53,7 +72,7 @@ def make_ER(price: pd.DataFrame, rate):
 
     for i in range(1, n):
         price_ER.iloc[i] = price_ER.iloc[i-1] * (price.iloc[i] / price.iloc[i-1]
-                                                 - rate.loc[dates[i-1]] * (dates[i] - dates[i-1]).days/ 36000.)
+                                                 - rate.loc[dates[i-1]] * (dates[i] - dates[i-1]).days / 36000.)
 
     return price_ER
 
@@ -72,7 +91,7 @@ def make_track(df_price: pd.DataFrame, df_weight: pd.DataFrame, tc=0, lag=1):
 
     n = len(index)
     shares = (df_weight / df_price).iloc[0]
-    cash = 1 - (shares * df_price.iloc[0]).sum() # add cash when weigh_sum <> 1 in ER
+    cash = 1 - (shares * df_price.iloc[0]).sum()  # add cash when weigh_sum <> 1 in ER
     value = np.ones(n)
 
     for i in range(1, len(index)):
@@ -106,7 +125,7 @@ def ols_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, f
 
         weight = np.dot(np.dot(np.linalg.inv(np.dot(x.T, x)), x.T), y)
 
-        df_weight.loc[end] = weight[:,0].T
+        df_weight.loc[end] = weight[:, 0].T
 
     return df_weight.fillna(0)
 
@@ -256,28 +275,41 @@ def kalman_with_selection(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length:
     return df_weight.fillna(0.0)
 
 
-if __name__ == "__main__":
+def selective_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, frequency: int,
+                          nu: float, criterion: str):
 
-    fund_name = 'HFRXMD'
-    US_rate = pd.read_csv(r"financial_data/USD_rates.csv", index_col=0, parse_dates=True, dayfirst=True)['3M']
+    df_weight_lasso, _ = lasso_regression_ic(df_y, df_x, sample_length, frequency, criterion, plot_lambda=False)
+    df_weight = pd.DataFrame(columns=df_x.columns)
+    index = df_weight_lasso.index.copy()
 
-    hfrx_all = pd.read_csv(r"financial_data/hfrx_daily_index_data.csv", index_col=0, parse_dates=True,
-                           dayfirst=True).ffill()
-    hfrx = make_ER(hfrx_all[[fund_name]].dropna(), US_rate)
+    _, m = df_x.shape
 
-    bnp = pd.read_csv(r"financial_data/bnp_data.csv", index_col=0, parse_dates=True, dayfirst=True)
-    risk_premia = pd.read_pickle("financial_data/risk_premia_ER_FX_USD.pkl")
+    cov_weight = np.eye(m)
+    cov_return = (nu ** 2) * np.eye(frequency)
 
-    prices_all = bnp.join(risk_premia, how="outer").ffill().join(hfrx, how="inner")
-    returns_all = prices_all.resample('1D').first().pct_change().dropna()
-    hrfx_returns = returns_all[[fund_name]]
-    returns_all = returns_all.drop(fund_name, axis=1)
-    size = 126
-    freq = 5
-    tc = 0.001
-    lag = 1
+    weight_forecast = np.zeros([m, 1])
+    cov_filter = np.zeros([m, m])
 
-    df_weight_skalman = kalman_with_selection(hrfx_returns, returns_all, sample_length=size, frequency=freq,
-                                              nu=0.02, nb_period=20, criterion='bic')
+    I = np.eye(m)
 
-    print(df_weight_skalman.head())
+    for date in index:
+        selection = np.diag(df_weight_lasso.loc[date] != 0.0)
+
+        i = df_x.index.get_loc(date)
+        x = np.dot(df_x.iloc[i-frequency+1:i+1].values, selection)
+        y = df_y.iloc[i-frequency+1:i+1].values
+
+        cov_forecast = cov_filter + cov_weight
+
+        temp = np.dot(cov_forecast, x.T)
+        inv = np.linalg.inv(np.dot(x, temp) + cov_return)
+        K = np.dot(temp, inv)
+
+        weight_filter = (weight_forecast + np.dot(K, y - np.dot(x, weight_forecast)))
+        cov_filter = np.dot(I - np.dot(K, x), cov_forecast)
+
+        weight_forecast = weight_filter
+        df_weight.loc[date] = np.dot(selection, weight_filter)[:, 0]
+
+    return df_weight
+

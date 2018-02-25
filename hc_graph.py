@@ -54,7 +54,7 @@ def hc_piechart(df, title=""):
 
     g.title.text = title
 
-    g.series, g.drilldown.series = hc.build.series_drilldown(df)
+    g.series, g.drilldown.series = hc.build.series_drilldown(100 * df)
 
     return g
 
@@ -91,6 +91,6 @@ def hc_spiderweb(df, title=""):
 
     # color names from http://www.w3schools.com/colors/colors_names.asp
     # color rgba() codes from http://www.hexcolortool.com/
-    g.series, g.drilldown.series = hc.build.series_drilldown(df, colorByPoint=False)
+    g.series, g.drilldown.series = hc.build.series_drilldown(100 * df, colorByPoint=False)
 
     return g

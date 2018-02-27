@@ -111,8 +111,8 @@ def make_track(df_price: pd.DataFrame, df_weight: pd.DataFrame, tc=0, lag=1):
 def ols_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, frequency: int, vol_target=False,
                    vol_period=20):
 
-    if vol_period > sample_length:
-        Exception("The period for vol_target cannot be longer than sample_length")
+    if vol_target and vol_period > sample_length:
+        raise Exception("The period for vol_target cannot be longer than sample_length")
 
     index = df_y.index.copy()
     n, m = df_x.shape
@@ -132,7 +132,7 @@ def ols_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, f
 
         if vol_target:
             port_vol = np.std(y[-vol_period:, 0])
-            repli_vol = np.std(np.dot(x[-vol_period:, :], weight[:, 0]))
+            repli_vol = np.std(np.dot(x[-vol_period:, :].nan_to_num(), weight[:, 0]))
             leverage = port_vol / repli_vol
 
         df_weight.loc[end] = leverage * weight[:, 0].T
@@ -143,8 +143,8 @@ def ols_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, f
 def lasso_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, frequency: int, l=0., vol_target=False,
                      vol_period=20):
 
-    if vol_period > sample_length:
-        Exception("The period for vol_target cannot be longer than sample_length")
+    if vol_target and vol_period > sample_length:
+        raise Exception("The period for vol_target cannot be longer than sample_length")
 
     index = df_y.index.copy()
     n, m = df_x.shape
@@ -155,7 +155,7 @@ def lasso_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
         start = index[i*frequency]
         end = index[i*frequency + sample_length - 1]
 
-        stdx = df_x.loc[start:end].std(axis=0, skipna=False).replace({0 : np.nan})
+        stdx = df_x.loc[start:end].std(axis=0, skipna=False).replace({0: np.nan})
         stdy = df_y.loc[start:end].std(axis=0)
         x = (df_x.loc[start:end] / stdx).fillna(0).values
         y = (df_y.loc[start:end] / stdy).values
@@ -170,7 +170,7 @@ def lasso_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
 
         if vol_target:
             port_vol = np.std(y[-vol_period:, 0])
-            repli_vol = np.std(np.dot(x[-vol_period:, :], weight))
+            repli_vol = np.std(np.dot(x[-vol_period:, :].nan_to_num(), weight))
             leverage = port_vol / repli_vol
 
         df_weight.loc[end] = leverage * weight.T
@@ -181,8 +181,8 @@ def lasso_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
 def lasso_regression_ic(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, frequency: int,
                         criterion: str, plot_lambda=True, vol_target=False, vol_period=20):
 
-    if vol_period > sample_length:
-        Exception("The period for vol_target cannot be longer than sample_length")
+    if vol_target and vol_period > sample_length:
+        raise Exception("The period for vol_target cannot be longer than sample_length")
 
     index = df_y.index.copy()
     n, m = df_x.shape
@@ -209,7 +209,7 @@ def lasso_regression_ic(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: i
 
         if vol_target:
             port_vol = np.std(y[-vol_period:, 0])
-            repli_vol = np.std(np.dot(x[-vol_period:, :], weight))
+            repli_vol = np.std(np.dot(x[-vol_period:, :].nan_to_num(), weight))
             leverage = port_vol / repli_vol
 
         df_weight.loc[end] = leverage * weight
@@ -225,8 +225,8 @@ def lasso_regression_ic(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: i
 def ridge_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, frequency: int, l=0., vol_target=False,
                      vol_period=20):
 
-    if vol_period > sample_length:
-        Exception("The period for vol_target cannot be longer than sample_length")
+    if vol_target and vol_period > sample_length:
+        raise Exception("The period for vol_target cannot be longer than sample_length")
 
     index = df_y.index.copy()
     n, m = df_x.shape
@@ -253,7 +253,7 @@ def ridge_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
 
         if vol_target:
             port_vol = np.std(y[-vol_period:, 0])
-            repli_vol = np.std(np.dot(x[-vol_period:, :], weight))
+            repli_vol = np.std(np.dot(x[-vol_period:, :].nan_to_num(), weight))
             leverage = port_vol / repli_vol
 
         df_weight.loc[end] = leverage * weight
@@ -262,10 +262,10 @@ def ridge_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
 
 
 def kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, sigma_weight: float,
-                  sigma_return: float, weight_init=0, vol_target=True, vol_period=20):
+                  sigma_return: float, weight_init=0, vol_target=False, vol_period=20):
 
-    if vol_period < frequency:
-        Exception("The period for vol_target cannot be shorter than frequency")
+    if vol_target and vol_period < frequency:
+        raise Exception("The period for vol_target cannot be shorter than frequency")
 
     index = df_y.index.copy()
     n, m = df_x.shape
@@ -281,13 +281,16 @@ def kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, sigma_
 
     I = np.eye(m)
 
+    if not vol_target:
+        vol_period = frequency
+
     for i in range((n - vol_period)//frequency + 1):
 
         start = index[vol_period + (i - 1) * frequency]
         vol_start = index[i * frequency]
         end = index[vol_period + i * frequency - 1]
 
-        x = df_x.loc[start:end].values
+        x = df_x.loc[start:end].fillna(0).values
         y = df_y.loc[start:end].values
 
         cov_forecast = cov_filter + cov_weight
@@ -303,7 +306,7 @@ def kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, sigma_
 
         if vol_target:
             port_vol = np.std(df_y.loc[vol_start:end].values)
-            repli_vol = np.std(np.dot(df_x.loc[vol_start:end].values, weight_filter[:, 0]))
+            repli_vol = np.std(np.dot(df_x.loc[vol_start:end].fillna(0).values, weight_filter[:, 0]))
             leverage = port_vol / repli_vol
 
         df_weight.loc[end] = leverage * weight_filter[:, 0].T
@@ -314,10 +317,10 @@ def kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, sigma_
 def kalman_with_selection(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, frequency: int,
                           nu: float, nb_period: int, criterion: str, vol_target=False, vol_period=20):
     if nb_period > sample_length:
-        Exception("nb_period cannot be longer than sample_length")
+        raise Exception("nb_period cannot be longer than sample_length")
 
-    if vol_period > sample_length:
-        Exception("The period for vol_target cannot be longer than sample_length")
+    if vol_target and vol_period > sample_length:
+        raise Exception("The period for vol_target cannot be longer than sample_length")
 
     df_weight_lasso, _ = lasso_regression_ic(df_y, df_x, sample_length, frequency, criterion, plot_lambda=False)
     df_weight = pd.DataFrame(columns=df_x.columns)
@@ -330,7 +333,7 @@ def kalman_with_selection(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length:
             df_weight.loc[date, :] = 0
         else:
             i = df_x.index.get_loc(date)
-            df_x_ = df_x[selection].iloc[i-nb_period+1: i+1]
+            df_x_ = df_x[selection].iloc[i-nb_period+1: i+1].fillna(0)
             df_y_ = df_y.loc[df_x_.index]
             kalman = kalman_filter(df_y=df_y_, df_x=df_x_, frequency=1, sigma_weight=1.,
                                    sigma_return=nu, weight_init=df_weight_lasso.loc[date, selection])
@@ -340,7 +343,7 @@ def kalman_with_selection(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length:
 
             if vol_target:
                 port_vol = np.std(df_y.iloc[i - vol_period + 1:i + 1].values)
-                repli_vol = np.std(np.dot(df_x[selection].iloc[i - vol_period + 1:i + 1].values, weight))
+                repli_vol = np.std(np.dot(df_x[selection].iloc[i - vol_period + 1:i + 1].fillna(0).values, weight))
                 leverage = port_vol / repli_vol
 
             df_weight.loc[date, selection] = leverage * weight
@@ -351,8 +354,8 @@ def kalman_with_selection(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length:
 def selective_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, frequency: int,
                           nu: float, criterion: str, vol_target=False, vol_period=20):
 
-    if vol_period > sample_length:
-        Exception("The period for vol_target cannot be longer than sample_length")
+    if vol_target and vol_period > sample_length:
+        raise Exception("The period for vol_target cannot be longer than sample_length")
 
     df_weight_lasso, _ = lasso_regression_ic(df_y, df_x, sample_length, frequency, criterion, plot_lambda=False)
     df_weight = pd.DataFrame(columns=df_x.columns)
@@ -372,7 +375,7 @@ def selective_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_lengt
         selection = np.diag(df_weight_lasso.loc[date] != 0.0)
 
         i = df_x.index.get_loc(date)
-        x = np.dot(df_x.iloc[i-frequency+1:i+1].values, selection)
+        x = np.dot(df_x.iloc[i-frequency+1:i+1].fillna(0).values, selection)
         y = df_y.iloc[i-frequency+1:i+1].values
 
         cov_forecast = cov_filter + cov_weight
@@ -390,7 +393,7 @@ def selective_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_lengt
 
         if vol_target:
             port_vol = np.std(df_y.iloc[i-vol_period+1:i+1].values)
-            repli_vol = np.std(np.dot(df_x.iloc[i-vol_period+1:i+1].values, weight[:, 0]))
+            repli_vol = np.std(np.dot(df_x.iloc[i-vol_period+1:i+1].fillna(0).values, weight[:, 0]))
             leverage = port_vol / repli_vol
 
         df_weight.loc[date] = leverage * weight[:, 0].T

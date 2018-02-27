@@ -1,6 +1,8 @@
 import numpy as np
 
+
 class cluster:
+
     def __init__(self, names, correl_matrix):
         names = list(set(names))
         self.names = names
@@ -15,6 +17,9 @@ class cluster:
             return np.log(n / c) + (n - 1) * np.log((n * n - n) / (n * n - c))
         else:
             return 0
+
+    def average_correl(self):
+        return (self.c - self.n) / (self.n * (self.n - 1))
 
 
 def merge_clusters(cluster1, cluster2, C):

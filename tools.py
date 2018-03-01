@@ -3,7 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
+from scipy.optimize import minimize
 from sklearn.linear_model import Lasso, LassoLarsIC
+import pdb
 
 
 def make_stats_maxence(df_price: pd.DataFrame):
@@ -400,3 +402,82 @@ def selective_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_lengt
 
     return df_weight.fillna(0.0)
 
+
+def ml_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, tau: float,
+                     weight_init=0, vol_target=False, vol_period=20, plot_sigma=False):
+
+    if vol_target and vol_period < frequency:
+        raise Exception("The period for vol_target cannot be shorter than frequency")
+
+    index = df_y.index.copy()
+    n, m = df_x.shape
+
+    sigma_weight = 1.0
+    sigma_return = 1.0
+
+    df_weight = pd.DataFrame(columns=df_x.columns)
+    df_sigma = pd.DataFrame(columns=[r"$\tilde{\sigma}_{\epsilon}$",r"$\tilde{\sigma}_{\eta}$",
+                                     r"$\sigma_{\epsilon}$",r"$\sigma_{\eta}$"])
+
+    try:
+        weight_filter = np.array(weight_init.values).reshape(m, 1)
+    except:
+        weight_filter = np.zeros([m, 1])
+
+    cov_filter = np.zeros([m, m])
+
+    I = np.eye(m)
+
+    if not vol_target:
+        vol_period = frequency
+
+    for i in range((n - vol_period)//frequency + 1):
+
+        start = index[vol_period + (i - 1) * frequency]
+        vol_start = index[i * frequency]
+        end = index[vol_period + i * frequency - 1]
+
+        x = df_x.loc[start:end].fillna(0).values
+        y = df_y.loc[start:end].values
+
+        def max_likelihood(theta):
+            gamma = np.dot(x, np.dot(cov_filter + (theta[1] ** 2) * I, x.T)) + (theta[0] ** 2) * np.eye(frequency)
+            pred_return = np.dot(x, weight_filter)
+            error = y - pred_return
+            return np.log(np.linalg.det(gamma)) - np.dot(error.T, np.dot(gamma, error))
+
+        bnds = ((0.0, None), (0.0, None))
+        res = minimize(max_likelihood, (1.0, 1.0), method='SLSQP', bounds=bnds)
+        theta_ = res.x
+
+        sigma_weight = tau*theta_[1] + (1-tau)*sigma_weight
+        sigma_return = tau * theta_[0] + (1 - tau) * sigma_return
+
+        df_sigma.loc[end] = [theta_[0], theta_[1], sigma_return, sigma_weight]
+
+        cov_weight = (sigma_weight ** 2) * np.eye(m)
+        cov_return = (sigma_return ** 2) * np.eye(frequency)
+
+        cov_forecast = cov_filter + cov_weight
+
+        temp = np.dot(cov_forecast, x.T)
+        inv = np.linalg.inv(np.dot(x, temp) + cov_return)
+        K = np.dot(temp, inv)
+
+        weight_filter = (weight_filter + np.dot(K, y - np.dot(x, weight_filter)))
+        cov_filter = np.dot(I - np.dot(K, x), cov_forecast)
+
+        leverage = 1
+
+        if vol_target:
+            port_vol = np.std(df_y.loc[vol_start:end].values)
+            repli_vol = np.std(np.dot(df_x.loc[vol_start:end].fillna(0).values, weight_filter[:, 0]))
+            leverage = port_vol / repli_vol
+
+        df_weight.loc[end] = leverage * weight_filter[:, 0].T
+
+    if plot_sigma:
+        sns.set()
+        df_sigma.plot(figsize=(14, 6))
+        plt.show()
+    return df_weight.fillna(0)

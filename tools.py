@@ -5,7 +5,7 @@ import seaborn as sns
 from scipy import stats
 from scipy.optimize import minimize
 from sklearn.linear_model import Lasso, LassoLarsIC
-import pdb
+from scipy.optimize import basinhopping
 
 
 def make_stats_maxence(df_price: pd.DataFrame):
@@ -412,12 +412,12 @@ def ml_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, tau
     index = df_y.index.copy()
     n, m = df_x.shape
 
-    sigma_weight = 1.0
-    sigma_return = 1.0
+    sigma_weight = 0.
+    sigma_return = 0.
 
     df_weight = pd.DataFrame(columns=df_x.columns)
-    df_sigma = pd.DataFrame(columns=[r"$\tilde{\sigma}_{\epsilon}$",r"$\tilde{\sigma}_{\eta}$",
-                                     r"$\sigma_{\epsilon}$",r"$\sigma_{\eta}$"])
+    df_sigma = pd.DataFrame(columns=[r"$\tilde{\sigma}_{\epsilon}$", r"$\tilde{\sigma}_{\eta}$",
+                                     r"$\sigma_{\epsilon}$", r"$\sigma_{\eta}$"])
 
     try:
         weight_filter = np.array(weight_init.values).reshape(m, 1)
@@ -426,7 +426,8 @@ def ml_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, tau
 
     cov_filter = np.zeros([m, m])
 
-    I = np.eye(m)
+    Ip = np.eye(m)
+    In = np.eye(frequency)
 
     if not vol_target:
         vol_period = frequency
@@ -440,18 +441,29 @@ def ml_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, tau
         x = df_x.loc[start:end].fillna(0).values
         y = df_y.loc[start:end].values
 
-        def max_likelihood(theta):
-            gamma = np.dot(x, np.dot(cov_filter + (theta[1] ** 2) * I, x.T)) + (theta[0] ** 2) * np.eye(frequency)
+        def log_likelihood(theta):
+            theta = theta.reshape(2,)
+            gamma = np.dot(x, np.dot(cov_filter + ((theta[1]) ** 2) * Ip, x.T)) + ((theta[0]) ** 2) * In
             pred_return = np.dot(x, weight_filter)
             error = y - pred_return
-            return np.log(np.linalg.det(gamma)) - np.dot(error.T, np.dot(gamma, error))
+            try:
+                return np.log(np.linalg.det(gamma)) + np.dot(error.T, np.dot(np.linalg.inv(gamma), error))[0]
+            except:
+                return np.inf
 
-        bnds = ((0.0, None), (0.0, None))
-        res = minimize(max_likelihood, (1.0, 1.0), method='SLSQP', bounds=bnds)
+        bnd = 1e-15
+        bnds = ((bnd, None), (bnd, None))
+        minimizer_kwargs = {"method": 'L-BFGS-B', "bounds": bnds}
+        res = basinhopping(log_likelihood, np.array([sigma_return, sigma_weight]),
+                           minimizer_kwargs=minimizer_kwargs)
         theta_ = res.x
 
-        sigma_weight = tau*theta_[1] + (1-tau)*sigma_weight
-        sigma_return = tau * theta_[0] + (1 - tau) * sigma_return
+        if sigma_weight == 0. and sigma_return == 0.:
+            sigma_weight = theta_[1]
+            sigma_return = theta_[0]
+        else:
+            sigma_weight = tau * theta_[1] + (1 - tau) * sigma_weight
+            sigma_return = tau * theta_[0] + (1 - tau) * sigma_return
 
         df_sigma.loc[end] = [theta_[0], theta_[1], sigma_return, sigma_weight]
 
@@ -465,7 +477,7 @@ def ml_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, tau
         K = np.dot(temp, inv)
 
         weight_filter = (weight_filter + np.dot(K, y - np.dot(x, weight_filter)))
-        cov_filter = np.dot(I - np.dot(K, x), cov_forecast)
+        cov_filter = np.dot(Ip - np.dot(K, x), cov_forecast)
 
         leverage = 1
 
@@ -478,6 +490,8 @@ def ml_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, tau
 
     if plot_sigma:
         sns.set()
-        df_sigma.plot(figsize=(14, 6))
+        df_sigma[[r"$\tilde{\sigma}_{\epsilon}$", r"$\sigma_{\epsilon}$"]].plot(figsize=(14, 6), logy=True)
+        df_sigma[[r"$\tilde{\sigma}_{\eta}$", r"$\sigma_{\eta}$"]].plot(figsize=(14, 6), logy=True)
         plt.show()
+
     return df_weight.fillna(0)

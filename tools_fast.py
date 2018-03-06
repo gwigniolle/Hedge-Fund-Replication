@@ -6,7 +6,17 @@ import scipy as sp
 from scipy import stats
 from scipy.optimize import minimize
 from sklearn.linear_model import Lasso, LassoLarsIC
+from numba import jit
+import numba as nb
 
+
+@jit
+def nan_to_num(array):
+    n, m = array.shape
+    for i in np.arange(n):
+        for j in np.arange(m):
+            if array[i, j] == np.nan: array[i, j] = 0.
+    return array
 
 def make_stats_maxence(df_price: pd.DataFrame):
     df_return = df_price.pct_change().dropna()
@@ -44,38 +54,50 @@ def make_FXHedge(df_price: pd.DataFrame, df_fx: pd.Series):
     :return:
     """
     dates = df_price.loc[df_fx.index[0]:].index
-    price_fx_hedge = pd.DataFrame(index=dates, columns=df_price.columns)
     df_fx = df_fx.reindex(dates).ffill()
-    n = len(dates)
-    price_fx_hedge.iloc[0] = 1.
+    price = df_price.loc[dates].values
+    fx = df_fx.values
+    fx_hedge = make_FXHedge_jit(price, fx)
+    return pd.DataFrame(index=dates, columns=df_price.columns, data=fx_hedge)
 
+
+@jit
+def make_FXHedge_jit(price, fx):
+    n, m = price.shape
+    fx_hedge = np.ndarray([n, m])
+    fx_hedge[0] = np.ones(m)
     for i in range(1, n):
-        price_fx_hedge.iloc[i] = price_fx_hedge.iloc[i-1] * (1 + df_price.iloc[i] * df_fx.iloc[i] /
-                                                             (df_price.iloc[i-1] * df_fx.iloc[i-1])
-                                                             - df_fx.iloc[i] / df_fx.iloc[i-1])
-    return price_fx_hedge
+        fx_hedge[i] = fx_hedge[i-1] * (1 + price[i] * fx[i] / (price[i-1] * fx[i-1]) - fx[i] / fx[i-1])
+    return fx_hedge
         
 
-def make_ER(price: pd.DataFrame, rate):
-
+def make_ER(df_price: pd.DataFrame, df_rate: pd.Series):
     """
     :param price: pd.DataFrame containing the prices of the ticker
     :param rate: pd.Series containing the rate prices
     :return:
     """
+    dates = df_price.loc[df_rate.index[0]:].index
+    df_rate = df_rate.reindex(dates).ffill()
+    price = df_price.loc[dates].values
+    rate = df_rate.values
+    price_er = make_ER_jit(price, rate, dates.values)
+    return pd.DataFrame(index=dates, columns=df_price.columns, data=price_er)
 
-    dates = price.loc[rate.index[0]:].index
-    price_ER = pd.DataFrame(index=dates, columns=price.columns)
-    price_ER.iloc[0] = 1.
-    n = len(dates)
-    rate = rate.reindex(dates).ffill()
+
+@jit
+def make_ER_jit(price, rate, dates):
+    n, m = price.shape
+    price_er = np.ndarray([n, m])
+    price_er[0] = np.ones(m)
+    day = np.timedelta64(1, 'D')
     for i in range(1, n):
-        price_ER.iloc[i] = price_ER.iloc[i-1] * (price.iloc[i] / price.iloc[i-1]
-                                                 - rate.loc[dates[i-1]] * (dates[i] - dates[i-1]).days / 36000.)
-    return price_ER
+        day_count = (dates[i] - dates[i-1]) / day
+        price_er[i] = price_er[i-1] * (price[i] / price[i-1] - rate[i-1] * day_count / 36000.)
+    return price_er
 
 
-def make_track(df_price: pd.DataFrame, df_weight: pd.DataFrame, tc=0, lag=1):
+def make_track(df_price: pd.DataFrame, df_weight: pd.DataFrame, tc=0., lag=1):
     """
     :param df_price: a dataframe containing the prices of the underlyings used in the index, columns must be the names
     and the index are the dates
@@ -83,54 +105,73 @@ def make_track(df_price: pd.DataFrame, df_weight: pd.DataFrame, tc=0, lag=1):
     :param tc: transaction cost, default is 0
     :return: a pandas series containing the track made from the composition in df_weight
     """
+    if lag < 0: raise Exception("Cannot have negative lag")
+    dates = df_price.loc[df_weight.index[0]:].index
+    reweight_dates = df_weight.index
+    price = df_price.loc[dates].values
+    weights = df_weight.values
+    if isinstance(tc, pd.DataFrame): tc = tc.values
+    else: tc = tc * np.ones(len(df_price.columns))
+    track = make_track_jit(price, np.array(dates.values, dtype='datetime64[D]'), weights,
+                           np.array(reweight_dates.values, dtype='datetime64[D]'), tc, lag)
+    return pd.DataFrame(index=dates, data=track, columns=['Track'])
 
-    index = df_price.index
-    reweight_index = df_weight.index
-    n = len(index)
-    shares = (df_weight / df_price).iloc[0]
-    cash = 1 - (shares * df_price.iloc[0]).sum()  # add cash when weigh_sum <> 1 in ER
-    value = np.ones(n)
 
-    for i in range(1, len(index)):
-        if index[i-lag] in reweight_index:
-            value[i] = (shares * df_price.loc[index[i]]).sum() + cash
-            cost = tc * value[i] * np.abs(df_weight.loc[index[i-lag]] - (shares * df_price.loc[index[i]])/value[i]).sum()
-            value[i] = value[i] - cost
-            shares = df_weight.loc[index[i-lag]] * value[i] / df_price.loc[index[i]]
-            cash = value[i] - (shares * df_price.loc[index[i]]).sum()
+@jit
+def make_track_jit(price, dates, weights, reweight_dates, tc, lag):
+    n = len(dates)
+    shares = (weights[0] / price[0])
+    cash = 1 - np.sum((shares * price[0]))  # add cash when weigh_sum <> 1 in ER
+    track = np.ones(n)
+    if lag > 0: reweight_count = 0
+    else: reweight_count = 1
+    for i in range(1, n):
+        if dates[i-lag] in reweight_dates:
+            track[i] = np.sum(shares * price[i]) + cash
+            cost = track[i] * np.sum(tc * np.abs(weights[reweight_count] - (shares * price[i]) / track[i]))
+            track[i] = track[i] - cost
+            shares = weights[reweight_count] * track[i] / price[i]
+            cash = track[i] - np.sum(shares * price[i])
+            reweight_count += 1
         else: 
-            value[i] = (shares * df_price.loc[index[i]]).sum() + cash
+            track[i] = np.sum(shares * price[i]) + cash
+    return track
 
-    return pd.DataFrame(index=index, data=value, columns=['Track'])
+# -------------------------------------------------------------------------------------------------------------------- #
 
 
 def ols_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, frequency: int, vol_target=False,
                    vol_period=20):
-
     if vol_target and vol_period > sample_length:
         raise Exception("The period for vol_target cannot be longer than sample_length")
+    dates = df_y.index.copy()
+    n, _ = df_x.shape
+    x = df_x.values
+    y = df_y.values
+    weights = ols_regression_jit(y, x, sample_length, frequency, vol_target, vol_period)
+    df_weight = pd.DataFrame(columns=df_x.columns, data=weights,
+                             index=[dates[i*frequency+sample_length-1] for i in range((n-sample_length)//frequency+1)])
+    return df_weight.fillna(0)
 
-    index = df_y.index.copy()
-    n, m = df_x.shape
 
-    df_weight = pd.DataFrame(columns=df_x.columns)
-
+@jit
+def ols_regression_jit(y: np.ndarray, x: np.ndarray, sample_length: int, frequency: int, vol_target=False,
+                       vol_period=20):
+    n, m = x.shape
+    weights = np.zeros(((n - sample_length)//frequency + 1, m))
     for i in range((n - sample_length)//frequency + 1):
-        start = index[i*frequency]
-        end = index[i*frequency + sample_length - 1]
-        x = df_x.loc[start:end].values
-        y = df_y.loc[start:end].values
-
-        weight = sp.linalg.solve(np.dot(x.T, x), np.dot(x.T, y))
-
+        start = i*frequency
+        end = i*frequency + sample_length - 1
+        x_k = np.nan_to_num(x[start:end+1])
+        y_k = np.nan_to_num(y[start:end+1])
+        weight = np.linalg.solve(np.dot(x_k.T, x_k), np.dot(x_k.T, y_k))
         leverage = 1
         if vol_target:
-            port_vol = np.std(y[-vol_period:, 0])
-            repli_vol = np.std(np.dot(x[-vol_period:, :].nan_to_num(), weight[:, 0]))
+            port_vol = np.std(y_k[-vol_period:, 0])
+            repli_vol = np.std(np.dot(x_k[-vol_period:, :], weight[:, 0]))
             leverage = port_vol / repli_vol
-        df_weight.loc[end] = leverage * weight[:, 0].T
-
-    return df_weight.fillna(0)
+        weights[i] = leverage * weight[:, 0].T
+    return weights
 
 
 def lasso_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, frequency: int, l=0., vol_target=False,
@@ -161,7 +202,7 @@ def lasso_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
         leverage = 1
         if vol_target:
             port_vol = np.std(y[-vol_period:, 0])
-            repli_vol = np.std(np.dot(x[-vol_period:, :].nan_to_num(), weight))
+            repli_vol = np.std(np.dot(x[-vol_period:, :].np.nan_to_num(), weight))
             leverage = port_vol / repli_vol
         df_weight.loc[end] = leverage * weight.T
 
@@ -198,7 +239,7 @@ def lasso_regression_ic(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: i
         leverage = 1
         if vol_target:
             port_vol = np.std(y[-vol_period:, 0])
-            repli_vol = np.std(np.dot(x[-vol_period:, :].nan_to_num(), weight))
+            repli_vol = np.std(np.dot(x[-vol_period:, :].np.nan_to_num(), weight))
             leverage = port_vol / repli_vol
         df_weight.loc[end] = leverage * weight
 
@@ -230,7 +271,7 @@ def ridge_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
         y = (df_y.loc[start:end] / stdy).values
 
         l1 = l * sample_length / (np.float(m) * (stdy.iloc[0] ** 2))
-        weight = sp.linalg.solve(np.dot(x.T, x) + l1 * I, np.dot(x.T, y))
+        weight = sp.linalg.solve(np.dot(x.T, x) + l1 * I, np.dot(x.T, y), sym_pos=True, check_finite=False)
 
         df_weight.loc[end] = weight[:, 0]
         df_weight.loc[end] = df_weight.loc[end] * stdy.iloc[0] / stdx
@@ -239,60 +280,73 @@ def ridge_regression(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int,
         leverage = 1
         if vol_target:
             port_vol = np.std(y[-vol_period:, 0])
-            repli_vol = np.std(np.dot(x[-vol_period:, :].nan_to_num(), weight))
+            repli_vol = np.std(np.dot(x[-vol_period:, :].np.nan_to_num(), weight))
             leverage = port_vol / repli_vol
         df_weight.loc[end] = leverage * weight
 
     return df_weight.fillna(0)
 
+# -------------------------------------------------------------------------------------------------------------------- #
+
 
 def kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, sigma_weight: float, sigma_return: float,
                   weight_init=np.array([0]), cov_init=np.array([0]), vol_target=False, vol_period=20,
                   return_log_likelihood=False):
-
     if vol_target and vol_period < frequency:
         raise Exception("The period for vol_target cannot be shorter than frequency")
     if not vol_target:
         vol_period = frequency
-
     index = df_y.index.copy()
-    n, m = df_x.shape
+    n = len(index)
+    x = df_x.values
+    y = df_y.values
+    weights, log_likelihood = kalman_filter_jit(y, x, frequency, sigma_weight, sigma_return, weight_init, cov_init,
+                                                vol_target, vol_period)
+    df_weight = pd.DataFrame(columns=df_x.columns, data=weights,
+                             index=[index[vol_period + i*frequency - 1] for i in range((n-vol_period)//frequency + 1)])
+    if return_log_likelihood: return log_likelihood
+    else: return df_weight.fillna(0)
+
+
+@jit
+def kalman_filter_jit(y: np.ndarray, x: np.ndarray, frequency: int, sigma_weight: float, sigma_return: float,
+                      weight_init=np.array([0]), cov_init=np.array([0]), vol_target=False, vol_period=20):
+    if not vol_target:
+        vol_period = frequency
+    n, m = x.shape
     I = np.eye(m)
     In = np.eye(frequency)
     cov_weight = (sigma_weight ** 2) * I
-    cov_return = (sigma_return ** 2) * np.eye(frequency)
-    df_weight = pd.DataFrame(columns=df_x.columns)
+    cov_return = (sigma_return ** 2) * In
+    weights = np.zeros([(n - vol_period)//frequency + 1, m])
     if np.all(weight_init == 0): weight_filter = np.zeros([m, 1])
     else: weight_filter = weight_init
     if np.all(cov_init == 0): cov_filter = np.zeros([m, m])
     else: cov_filter = cov_init
     log_likelihood = 0
-
     for i in range((n - vol_period)//frequency + 1):
-        start = index[vol_period + (i - 1) * frequency]
-        vol_start = index[i * frequency]
-        end = index[vol_period + i * frequency - 1]
-        x = df_x.loc[start:end].fillna(0).values
-        y = df_y.loc[start:end].values
-
+        start = vol_period + (i - 1) * frequency
+        vol_start = i * frequency
+        end = vol_period + i * frequency - 1
+        x_k = np.nan_to_num(x[start:end+1])
+        y_k = np.nan_to_num(y[start:end+1])
         cov_forecast = cov_filter + cov_weight
-        temp = np.dot(cov_forecast, x.T)
-        gamma = np.dot(x, temp) + cov_return
-        K = sp.linalg.solve(gamma.T, temp.T).T
-        weight_filter = (weight_filter + np.dot(K, y - np.dot(x, weight_filter)))
-        cov_filter = np.dot(I - np.dot(K, x), cov_forecast)
-
+        temp = np.dot(cov_forecast, x_k.T)
+        gamma = np.dot(x_k, temp) + cov_return
+        K = sp.linalg.solve(gamma.T, temp.T, sym_pos=True, check_finite=False).T
+        weight_filter = (weight_filter + np.dot(K, y_k - np.dot(x_k, weight_filter)))
+        cov_filter = np.dot(I - np.dot(K, x_k), cov_forecast)
         leverage = 1
         if vol_target:
-            port_vol = np.std(df_y.loc[vol_start:end].values)
-            repli_vol = np.std(np.dot(df_x.loc[vol_start:end].fillna(0).values, weight_filter[:, 0]))
+            port_vol = np.std(y[vol_start:end+1])
+            repli_vol = np.std(np.dot(np.nan_to_num(x[vol_start:end+1]), weight_filter[:, 0]))
             leverage = port_vol / repli_vol
-        df_weight.loc[end] = leverage * weight_filter[:, 0].T
+        weights[i] = leverage * weight_filter[:, 0].T
+        log_likelihood += kalman_log_likelihood(gamma, x_k, y_k, weight_filter)
 
-        log_likelihood += kalman_log_likelihood(gamma, x, y, weight_filter)
+    return weights, log_likelihood[0]
 
-    if return_log_likelihood: return log_likelihood
-    else: return df_weight.fillna(0)
+# -------------------------------------------------------------------------------------------------------------------- #
 
 
 def kalman_with_selection(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: int, frequency: int,
@@ -357,7 +411,7 @@ def selective_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_lengt
         cov_forecast = cov_filter + cov_weight
         temp = np.dot(cov_forecast, x.T)
         gamma = np.dot(x, temp) + cov_return
-        K = sp.linalg.solve(gamma.T, temp.T).T
+        K = sp.linalg.solve(gamma.T, temp.T, sym_pos=True, check_finite=False).T
         weight_forecast = (weight_forecast + np.dot(K, y - np.dot(x, weight_forecast)))
         cov_filter = np.dot(I - np.dot(K, x), cov_forecast)
         weight = np.dot(selection, weight_forecast)
@@ -371,60 +425,25 @@ def selective_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_lengt
 
     return df_weight.fillna(0.0)
 
+# -------------------------------------------------------------------------------------------------------------------- #
 
-def ml_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, tau: float,
-                     vol_target=False, vol_period=20, plot_sigma=False):
 
+def ml_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, tau: float, vol_target=False,
+                     vol_period=20, plot_sigma=False):
     if vol_target and vol_period < frequency:
         raise Exception("The period for vol_target cannot be shorter than frequency")
     if not vol_target:
         vol_period = frequency
-
     index = df_y.index.copy()
-    n, m = df_x.shape
-    df_weight = pd.DataFrame(columns=df_x.columns)
+    n = len(index)
+    x = df_x.values
+    y = df_y.values
+    weights, sigma = ml_kalman_filter_jit(y, x, frequency, tau, vol_target, vol_period)
+    df_weight = pd.DataFrame(columns=df_x.columns, data=weights,
+                             index=[index[vol_period + i*frequency - 1] for i in range((n-vol_period)//frequency + 1)])
     df_sigma = pd.DataFrame(columns=[r"$\tilde{\sigma}_{\epsilon}$", r"$\tilde{\sigma}_{\eta}$",
-                                     r"$\hat{\sigma}_{\epsilon}$", r"$\hat{\sigma}_{\eta}$"])
-    Ip = np.eye(m)
-    In = np.eye(frequency)
-    weight_filter = np.zeros([m, 1])
-    cov_filter = np.zeros([m, m])
-    sigma_weight = 1.
-    sigma_return = 1.
-
-    for i in range((n - vol_period)//frequency + 1):
-        start = index[vol_period + (i - 1) * frequency]
-        vol_start = index[i * frequency]
-        end = index[vol_period + i * frequency - 1]
-        x = df_x.loc[start:end].fillna(0).values
-        y = df_y.loc[start:end].values
-
-        theta = max_likelihoog_estimator(sigma_return, sigma_weight, x, y, cov_filter, weight_filter)
-        if sigma_weight == 1. and sigma_return == 1.:
-            sigma_weight = theta[1]
-            sigma_return = theta[0]
-        else:
-            sigma_weight = tau * theta[1] + (1 - tau) * sigma_weight
-            sigma_return = tau * theta[0] + (1 - tau) * sigma_return
-
-        df_sigma.loc[end] = [theta[0], theta[1], sigma_return, sigma_weight]
-        cov_weight = (sigma_weight ** 2) * np.eye(m)
-        cov_return = (sigma_return ** 2) * np.eye(frequency)
-
-        cov_forecast = cov_filter + cov_weight
-        temp = np.dot(cov_forecast, x.T)
-        gamma = np.dot(x, temp) + cov_return
-        K = sp.linalg.solve(gamma.T, temp.T).T
-        weight_filter = (weight_filter + np.dot(K, y - np.dot(x, weight_filter)))
-        cov_filter = np.dot(Ip - np.dot(K, x), cov_forecast)
-
-        leverage = 1
-        if vol_target:
-            port_vol = np.std(df_y.loc[vol_start:end].values)
-            repli_vol = np.std(np.dot(df_x.loc[vol_start:end].fillna(0).values, weight_filter[:, 0]))
-            leverage = port_vol / repli_vol
-        df_weight.loc[end] = leverage * weight_filter[:, 0].T
-
+                                     r"$\hat{\sigma}_{\epsilon}$", r"$\hat{\sigma}_{\eta}$"],
+                            index=df_weight.index, data=sigma)
     df_sigma[r'$\hat{\nu}$'] = df_sigma[r"$\hat{\sigma}_{\epsilon}$"] / df_sigma[r"$\hat{\sigma}_{\eta}$"]
     if plot_sigma:
         fig, (ax1, ax2) = plt.subplots(1, 2)
@@ -434,127 +453,176 @@ def ml_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, tau
         plt.show()
         df_sigma[r'$\hat{\nu}$'].plot(figsize=(16, 8), logy=True)
         plt.show()
-
     return df_weight.fillna(0), df_sigma
 
 
-def ml_kalman_filter2(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, mle_period: int,
-                     vol_target=False, vol_period=20, plot_sigma=False):
+@jit
+def ml_kalman_filter_jit(y: np.ndarray, x: np.ndarray, frequency: int, tau: float, vol_target=False, vol_period=20):
+    n, m = x.shape
+    I = np.eye(m)
+    In = np.eye(frequency)
+    weights = np.zeros([(n - vol_period)//frequency + 1, m])
+    sigma = np.zeros([(n - vol_period)//frequency + 1, 4])
+    weight_filter = np.zeros([m, 1])
+    cov_filter = np.zeros([m, m])
+    sigma_weight = 1.
+    sigma_return = 1.
+    for i in range((n - vol_period)//frequency + 1):
+        start = vol_period + (i - 1) * frequency
+        vol_start = i * frequency
+        end = vol_period + i * frequency - 1
+        x_k = np.nan_to_num(x[start:end+1])
+        y_k = np.nan_to_num(y[start:end+1])
+        theta = max_likelihoog_estimator(sigma_return, sigma_weight, x_k, y_k, cov_filter, weight_filter)
+        if sigma_weight == 1. and sigma_return == 1.:
+            sigma_weight = theta[1]
+            sigma_return = theta[0]
+        else:
+            sigma_weight = tau * theta[1] + (1 - tau) * sigma_weight
+            sigma_return = tau * theta[0] + (1 - tau) * sigma_return
+        sigma[i] = [theta[0], theta[1], sigma_return, sigma_weight]
+        cov_weight = (sigma_weight ** 2) * I
+        cov_return = (sigma_return ** 2) * In
+        cov_forecast = cov_filter + cov_weight
+        temp = np.dot(cov_forecast, x_k.T)
+        gamma = np.dot(x_k, temp) + cov_return
+        K = sp.linalg.solve(gamma.T, temp.T, sym_pos=True, check_finite=False).T
+        weight_filter = (weight_filter + np.dot(K, y_k - np.dot(x_k, weight_filter)))
+        cov_filter = np.dot(I - np.dot(K, x_k), cov_forecast)
+        leverage = 1
+        if vol_target:
+            port_vol = np.std(y[vol_start:end+1])
+            repli_vol = np.std(np.dot(np.nan_to_num(x[vol_start:end+1]), weight_filter[:, 0]))
+            leverage = port_vol / repli_vol
+        weights[i] = leverage * weight_filter[:, 0].T
+    return weights, sigma
 
+# -------------------------------------------------------------------------------------------------------------------- #
+
+
+def ml_kalman_filter2(df_y: pd.DataFrame, df_x: pd.DataFrame, frequency: int, mle_period: int,
+                      vol_target=False, vol_period=20, plot_sigma=False):
     if vol_target and vol_period < frequency:
         raise Exception("The period for vol_target cannot be shorter than frequency")
     if not vol_target:
         vol_period = frequency
-
     index = df_y.index.copy()
-    n, m = df_x.shape
-    df_weight = pd.DataFrame(columns=df_x.columns)
-    df_sigma = pd.DataFrame(columns=[r"$\hat{\sigma}_{\epsilon}$", r"$\hat{\sigma}_{\eta}$"])
+    n = len(index)
+    x = df_x.values
+    y = df_y.values
+    weights, sigma = ml_kalman_filter2_jit(y, x, frequency, mle_period, vol_target, vol_period)
+    df_weight = pd.DataFrame(columns=df_x.columns, data=weights,
+                             index=[index[vol_period + i*frequency - 1] for i in range((n-vol_period)//frequency + 1)])
+    df_sigma = pd.DataFrame(columns=[r"$\hat{\sigma}_{\epsilon}$", r"$\hat{\sigma}_{\eta}$"],
+                            index=df_weight.index, data=sigma)
+    df_sigma[r'$\hat{\nu}$'] = df_sigma[r"$\hat{\sigma}_{\epsilon}$"] / df_sigma[r"$\hat{\sigma}_{\eta}$"]
+    if plot_sigma:
+        fig, (ax1, ax2) = plt.subplots(1, 2)
+        sns.set()
+        df_sigma[[r"$\hat{\sigma}_{\epsilon}$",
+                  r"$\hat{\sigma}_{\eta}$"]].plot(ax=ax1, figsize=(16, 6), secondary_y=[r"$\hat{\sigma}_{\epsilon}$"])
+        df_sigma[[r'$\hat{\nu}$']].plot(ax=ax2, figsize=(16, 6))
+        plt.show()
+    return df_weight.fillna(0), df_sigma
+
+
+@jit
+def ml_kalman_filter2_jit(y: np.ndarray, x: np.ndarray, frequency: int, mle_period: int, vol_target=False,
+                         vol_period=20):
+    n, m = x.shape
+    I = np.eye(m)
+    In = np.eye(frequency)
+    weights = np.zeros([(n - vol_period)//frequency + 1, m])
+    sigma = np.zeros([(n - vol_period)//frequency + 1, 2])
     weight_filter = np.zeros([m, 1])
     cov_filter = np.zeros([m, m])
-    Ip = np.eye(m)
-    In = np.eye(frequency)
     sigma_weight = 1.
     sigma_return = 1.
-
     weight_list = [weight_filter]
     cov_list = [cov_filter]
-
     for i in range((n - vol_period)//frequency + 1):
-        start = index[vol_period + (i - 1) * frequency]
-        vol_start = index[i * frequency]
-        end = index[vol_period + i * frequency - 1]
-        x = df_x.loc[start:end].fillna(0).values
-        y = df_y.loc[start:end].values
-
+        start = vol_period + (i - 1) * frequency
+        vol_start = i * frequency
+        end = vol_period + i * frequency - 1
+        x_k = np.nan_to_num(x[start:end+1])
+        y_k = np.nan_to_num(y[start:end+1])
         if len(weight_list) >= mle_period and len(cov_list) >= mle_period:
             weight_mle_start = weight_list.pop(0)
             cov_mle_start = cov_list.pop(0)
         else:
             weight_mle_start = weight_list[0]
             cov_mle_start = cov_list[0]
-        x_mle = df_x.iloc[vol_period+max([i-mle_period,-1])*frequency:vol_period+i*frequency]
-        y_mle = df_y.iloc[vol_period+max([i-mle_period,-1])*frequency:vol_period+i*frequency]
+        x_mle = np.nan_to_num(x[vol_period+max([i-mle_period, -1])*frequency:vol_period+i*frequency])
+        y_mle = np.nan_to_num(y[vol_period+max([i-mle_period, -1])*frequency:vol_period+i*frequency])
         theta = max_likelihoog_estimator2(sigma_return, sigma_weight, x_mle, y_mle, frequency, weight_mle_start,
                                           cov_mle_start)
         sigma_weight = theta[1]
         sigma_return = theta[0]
-        df_sigma.loc[end] = [sigma_return, sigma_weight]
-        cov_weight = (sigma_weight ** 2) * np.eye(m)
-        cov_return = (sigma_return ** 2) * np.eye(frequency)
-
+        sigma[i] = [sigma_return, sigma_weight]
+        cov_weight = (sigma_weight ** 2) * I
+        cov_return = (sigma_return ** 2) * In
         cov_forecast = cov_filter + cov_weight
-        temp = np.dot(cov_forecast, x.T)
-        gamma = np.dot(x, temp) + cov_return
-        K = sp.linalg.solve(gamma.T, temp.T).T
-        weight_filter = (weight_filter + np.dot(K, y - np.dot(x, weight_filter)))
-        cov_filter = np.dot(Ip - np.dot(K, x), cov_forecast)
-
+        temp = np.dot(cov_forecast, x_k.T)
+        gamma = np.dot(x_k, temp) + cov_return
+        K = sp.linalg.solve(gamma.T, temp.T, sym_pos=True, check_finite=False).T
+        weight_filter = (weight_filter + np.dot(K, y_k - np.dot(x_k, weight_filter)))
+        cov_filter = np.dot(I - np.dot(K, x_k), cov_forecast)
         leverage = 1
         if vol_target:
-            port_vol = np.std(df_y.loc[vol_start:end].values)
-            repli_vol = np.std(np.dot(df_x.loc[vol_start:end].fillna(0).values, weight_filter[:, 0]))
+            port_vol = np.std(y[vol_start:end+1])
+            repli_vol = np.std(np.dot(np.nan_to_num(x[vol_start:end+1]), weight_filter[:, 0]))
             leverage = port_vol / repli_vol
+        weights[i] = leverage * weight_filter[:, 0].T
+    return weights, sigma
 
-        df_weight.loc[end] = leverage * weight_filter[:, 0].T
-
-    df_sigma[r'$\hat{\nu}$'] = df_sigma[r"$\hat{\sigma}_{\epsilon}$"] / df_sigma[r"$\hat{\sigma}_{\eta}$"]
-    if plot_sigma:
-        fig, (ax1, ax2) = plt.subplots(1, 2)
-        sns.set()
-        df_sigma[[r"$\hat{\sigma}_{\eta}$", r"$\hat{\sigma}_{\epsilon}$"]].plot(ax=ax1, figsize=(16, 6),
-                                                                                secondary_y=[r"$\hat{\sigma}_{\epsilon}$"])
-        df_sigma[[r'$\hat{\nu}$']].plot(ax=ax2, figsize=(16, 6))
-        plt.show()
-
-    return df_weight.fillna(0), df_sigma
+# -------------------------------------------------------------------------------------------------------------------- #
 
 
+@jit
 def max_likelihoog_estimator(sigma_return, sigma_weight, x, y, cov_filter, weight_filter):
-    n, p = x.shape
-    In = np.eye(n)
-    Ip = np.eye(p)
-
-    def fun(theta):
-        theta = theta.reshape(2, )
-        sigma_r = 10 ** theta[0]
-        sigma_w = 10 ** theta[1]
-        gamma = np.linalg.multi_dot([x, cov_filter + (sigma_w ** 2) * Ip, x.T]) + (sigma_r ** 2) * In
-        _, logdet = np.linalg.slogdet(gamma)
-        pred_return = np.dot(x, weight_filter)
-        error = y - pred_return
-        try:
-            temp = sp.linalg.solve(gamma, error)
-            return (logdet + np.dot(error.T, temp))[0]
-        except:
-            return np.inf
-
-    res = minimize(fun, np.log10(np.array([sigma_return, sigma_weight])), method='Nelder-Mead')
+    res = minimize(fun_1, np.log10(np.array([sigma_return, sigma_weight])), method='Nelder-Mead',
+                   args=(x, y, cov_filter, weight_filter))
     return 10 ** res.x
 
 
+@jit
+def fun_1(theta, x, y, cov_filter, weight_filter):
+    n, p = x.shape
+    In = np.eye(n)
+    Ip = np.eye(p)
+    theta = theta.reshape(2, )
+    sigma_r = 10 ** theta[0]
+    sigma_w = 10 ** theta[1]
+    gamma = np.linalg.multi_dot([x, cov_filter + (sigma_w ** 2) * Ip, x.T]) + (sigma_r ** 2) * In
+    _, logdet = np.linalg.slogdet(gamma)
+    pred_return = np.dot(x, weight_filter)
+    error = y - pred_return
+    temp = sp.linalg.solve(gamma, error, sym_pos=True, check_finite=False)
+    return (logdet + np.dot(error.T, temp))[0]
+
+
+@jit
 def kalman_log_likelihood(gamma, x, y, weight_filter):
     _, logdet = np.linalg.slogdet(gamma)
     pred_return = np.dot(x, weight_filter)
     error = y - pred_return
-    try:
-        temp = sp.linalg.solve(gamma, error)
-        return (logdet + np.dot(error.T, temp))[0]
-    except:
-        return np.inf
+    temp = sp.linalg.solve(gamma, error, sym_pos=True, check_finite=False)
+    return (logdet + np.dot(error.T, temp))[0]
 
 
-def max_likelihoog_estimator2(sigma_return, sigma_weight, df_x, df_y, frequency, weight_mle_start, cov_mle_start):
+@jit
+def fun_2(theta, x, y, frequency, weight_mle_start, cov_mle_start):
+    theta = theta.reshape(2,)
+    _, likelihood = kalman_filter_jit(y, x, frequency, 10 ** theta[1], 10 ** theta[0], cov_init=cov_mle_start,
+                                      weight_init=weight_mle_start)
+    return likelihood
 
-    def fun(theta):
-        try:
-            likelihood = kalman_filter(df_y, df_x, frequency, 10 ** theta[1], 10 ** theta[0], cov_init=cov_mle_start,
-                                       weight_init=weight_mle_start, return_log_likelihood=True)
-            return likelihood
-        except: return np.inf
 
-    options = {'maxiter': 100, 'gtol': frequency * 1e-1, 'eps': 1e-3, 'ftol': frequency * 1e-3, 'maxfun':100}
+@jit
+def max_likelihoog_estimator2(sigma_return, sigma_weight, x, y, frequency, weight_mle_start, cov_mle_start):
+    options = {'maxiter': 100, 'gtol': 1e-5, 'eps': 1, 'ftol': 1e-3, 'maxfun': 100}
     bounds = ((-10, 10), (-10, 10))
-    res = minimize(fun, np.log10(np.array([sigma_return, sigma_weight])), method='L-BFGS-B', bounds=bounds,
-                   options=options)
+    res = minimize(fun_2, np.log10(np.array([sigma_return, sigma_weight])), method='L-BFGS-B',
+                   options=options, args=(x, y, frequency, weight_mle_start, cov_mle_start), bounds=bounds)
     return 10 ** res.x
+

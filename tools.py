@@ -181,6 +181,7 @@ def lasso_regression_ic(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: i
 
     for i in range((n - sample_length) // frequency + 1):
         start = index[i * frequency]
+        vol_start = index[i * frequency + sample_length - vol_period]
         end = index[i * frequency + sample_length - 1]
         stdx = df_x.loc[start:end].std(axis=0, skipna=False).replace({0: np.nan})
         stdy = df_y.loc[start:end].std(axis=0)
@@ -197,8 +198,8 @@ def lasso_regression_ic(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_length: i
 
         leverage = 1
         if vol_target:
-            port_vol = np.std(y[-vol_period:, 0])
-            repli_vol = np.std(np.dot(x[-vol_period:, :].nan_to_num(), weight))
+            port_vol = np.std(df_y.loc[vol_start:end].values)
+            repli_vol = np.std(np.dot(df_x.loc[vol_start:end].fillna(0).values, weight))
             leverage = port_vol / repli_vol
         df_weight.loc[end] = leverage * weight
 

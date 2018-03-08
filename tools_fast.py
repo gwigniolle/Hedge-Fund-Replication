@@ -46,6 +46,7 @@ def make_stats_maxence(df_price: pd.DataFrame):
 
 
 def replication_stats(df_price: pd.DataFrame, fund_name: str):
+    df_price = df_price.resample('7D').first()
     rho = df_price.pct_change().corr(method="pearson")
     tau = df_price.pct_change().corr(method="kendall")
     returns_track = df_price.pct_change()
@@ -53,8 +54,8 @@ def replication_stats(df_price: pd.DataFrame, fund_name: str):
     df = pd.DataFrame()
     df['Tracking error'] = (returns_track.T - returns_fund.values).std(axis=1)
     df['R-squared'] = 1 - (returns_track.T - returns_fund.values).var(axis=1) / returns_fund.var()
-    df['Sharpe ratio'] = np.sqrt(252) * returns_track.mean() / returns_track.std()
-    df['Annual Return'] = (df_price.iloc[-1] / df_price.iloc[0]) ** (252 / len(df_price.index)) - 1
+    df['Sharpe ratio'] = np.sqrt(52) * returns_track.mean() / returns_track.std()
+    df['Annual Return'] = (df_price.iloc[-1] / df_price.iloc[0]) ** (52 / len(df_price.index)) - 1
     df['Correlation'] = rho[fund_name]
     df['Kendall tau'] = tau[fund_name]
     return df

@@ -59,7 +59,7 @@ def hc_piechart(df, title=""):
     return g
 
 
-def hc_spiderweb(df, title=""):
+def hc_spiderweb(df, title="", normalized=True):
     g = hc.Highcharts()
 
     # g.chart.type = 'column'
@@ -80,7 +80,6 @@ def hc_spiderweb(df, title=""):
     g.yAxis.lineWidth = 0
     g.yAxis.plotLines = [{'color': 'gray', 'value': 0, 'width': 1.5}]
 
-    g.tooltip.pointFormat = '<span style="color:{series.color}">{series.name}: <b>{point.y:,.3f}%</b><br/>'
     g.tooltip.shared = True
 
     g.legend.enabled = True
@@ -88,6 +87,9 @@ def hc_spiderweb(df, title=""):
     g.legend.verticalAlign = 'top'
     g.legend.y = 70
     g.legend.layout = 'vertical'
+
+    if normalized:
+        g.tooltip.pointFormat = '<span style="color:{series.color}">{series.name}: <b>{point.y:,.3f}%</b><br/>'
 
     # color names from http://www.w3schools.com/colors/colors_names.asp
     # color rgba() codes from http://www.hexcolortool.com/

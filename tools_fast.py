@@ -10,6 +10,17 @@ np.seterr(divide='ignore', invalid='ignore')
 
 
 @jit(cache=True, nopython=True, nogil=True)
+def max_drawdown(x: np.ndarray):
+    n, p = x.shape
+    current_max = np.zeros(p)
+    max_dd = np.zeros(p)
+    for i in np.arange(n):
+        current_max = np.maximum(current_max, x[i])
+        max_dd = np.minimum(max_dd, (x[i]-current_max)/current_max)
+    return max_dd
+
+
+@jit(cache=True, nopython=True, nogil=True)
 def std(x: np.ndarray):
     n, p = x.shape
     s = np.zeros(p)
@@ -52,12 +63,13 @@ def replication_stats(df_price: pd.DataFrame, fund_name: str):
     returns_track = df_price.pct_change()
     returns_fund = df_price[fund_name].pct_change()
     df = pd.DataFrame()
-    df['Tracking error'] = (returns_track.T - returns_fund.values).std(axis=1)
-    df['R-squared'] = 1 - (returns_track.T - returns_fund.values).var(axis=1) / returns_fund.var()
-    df['Sharpe ratio'] = np.sqrt(52) * returns_track.mean() / returns_track.std()
-    df['Annual Return'] = (df_price.iloc[-1] / df_price.iloc[0]) ** (52 / len(df_price.index)) - 1
     df['Correlation'] = rho[fund_name]
     df['Kendall tau'] = tau[fund_name]
+    df['Tracking error'] = np.sqrt(52) * (returns_track.T - returns_fund.values).std(axis=1)
+    df['R-squared'] = 1 - (returns_track.T - returns_fund.values).var(axis=1) / returns_fund.var()
+    df['Sharpe ratio'] = np.sqrt(52) * returns_track.mean() / returns_track.std()
+    df['Annual Return'] = (df_price.iloc[-1] / df_price.iloc[0]) ** (252 / len(df_price.index)) - 1
+    df['Maximum Drawdown'] = max_drawdown(df_price.values)
     return df
 
 

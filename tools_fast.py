@@ -132,7 +132,7 @@ def make_track_jit(price, dates, weights, reweight_dates, tc, lag):
     track = np.ones(n)
     if lag >= 0: reweight_count = 0
     else: reweight_count = 1
-    for i in np.arange(n):
+    for i in np.arange(lag, n):
         if in_array(reweight_dates, dates[i-lag]):
             track[i] = np.sum(shares * price[i]) + cash
             cost = track[i] * np.sum(tc * np.abs(weights[reweight_count] - (shares * price[i]) / track[i]))

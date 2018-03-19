@@ -6,6 +6,7 @@ from scipy import stats
 from scipy.optimize import minimize
 from sklearn.linear_model import Lasso, LassoLarsIC
 from numba import jit
+import warnings
 np.seterr(divide='ignore', invalid='ignore')
 
 
@@ -68,7 +69,7 @@ def replication_stats(df_price: pd.DataFrame, fund_name: str):
     df['Tracking error'] = np.sqrt(52) * (returns_track.T - returns_fund.values).std(axis=1)
     df['R-squared'] = 1 - (returns_track.T - returns_fund.values).var(axis=1) / returns_fund.var()
     df['Sharpe ratio'] = np.sqrt(52) * returns_track.mean() / returns_track.std()
-    df['Annual Return'] = (df_price.iloc[-1] / df_price.iloc[0]) ** (252 / len(df_price.index)) - 1
+    df['Annual Return'] = (df_price.iloc[-1] / df_price.iloc[0]) ** (52 / len(df_price.index)) - 1
     df['Maximum Drawdown'] = max_drawdown(df_price.values)
     return df
 
@@ -111,7 +112,7 @@ def make_ER_jit(price, rate, day_count):
 
 
 def make_track(df_price: pd.DataFrame, df_weight: pd.DataFrame, tc=0., lag=1):
-    if lag < 0: raise Exception("Cannot have negative lag")
+    if lag < 0: warnings.warn("Negative lag !")
     dates = df_price.loc[df_weight.index[0]:].index
     reweight_dates = df_weight.index
     price = df_price.loc[dates].values
@@ -125,13 +126,13 @@ def make_track(df_price: pd.DataFrame, df_weight: pd.DataFrame, tc=0., lag=1):
 
 @jit(cache=True, nopython=True, nogil=True)
 def make_track_jit(price, dates, weights, reweight_dates, tc, lag):
-    n = len(dates)
-    shares = (weights[0] / price[0])
+    n, m = price.shape
+    shares = np.zeros(m)
     cash = 1 - np.sum((shares * price[0]))  # add cash when weigh_sum <> 1 in ER
     track = np.ones(n)
-    if lag > 0: reweight_count = 0
+    if lag >= 0: reweight_count = 0
     else: reweight_count = 1
-    for i in np.arange(1, n):
+    for i in np.arange(n):
         if in_array(reweight_dates, dates[i-lag]):
             track[i] = np.sum(shares * price[i]) + cash
             cost = track[i] * np.sum(tc * np.abs(weights[reweight_count] - (shares * price[i]) / track[i]))

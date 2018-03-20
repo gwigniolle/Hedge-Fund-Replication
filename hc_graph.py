@@ -1,4 +1,5 @@
 import ezhc as hc
+from collections import OrderedDict
 
 """
     simple definition of HighCharts template that are to be used in the Jupyter Notebook for advanced 
@@ -59,6 +60,30 @@ def hc_piechart(df, title=""):
     return g
 
 
+def hc_barplot(df, title=""):
+    g = hc.Highcharts()
+
+    g.chart.type = 'bar'
+    g.chart.width = 800
+    g.chart.height = 500
+    g.exporting = False
+    g.xAxis.categories = list(OrderedDict.fromkeys(list(df.index.get_level_values(0))))
+    gpo = g.plotOptions.pie
+    gpo.showInLegend = False
+    gpo.dataLabels.enabled = True
+    gpo.dataLabels.format = '{point.name}: {point.y:.1f}%'
+    gpo.center = ['50%', '50%']
+    gpo.size = '65%'
+    g.drilldown.drillUpButton.position = {'x': 0, 'y': 0}
+    g.tooltip.pointFormat = '<span style="color:{series.color}">{series.name}: <b>{point.y:,.3f}%</b><br/>'
+
+    g.title.text = title
+
+    g.series, g.drilldown.series = hc.build.series_drilldown(100 * df)
+
+    return g
+
+
 def hc_spiderweb(df, title="", normalized=True):
     g = hc.Highcharts()
 
@@ -87,6 +112,8 @@ def hc_spiderweb(df, title="", normalized=True):
     g.legend.verticalAlign = 'top'
     g.legend.y = 70
     g.legend.layout = 'vertical'
+
+    g.title.text = title
 
     if normalized:
         g.tooltip.pointFormat = '<span style="color:{series.color}">{series.name}: <b>{point.y:,.3f}%</b><br/>'

@@ -382,14 +382,11 @@ def selective_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_lengt
         raise Exception("The period for vol_target cannot be longer than sample_length")
     if sample_length < frequency:
         raise Exception("The sample_length cannot be shorter than frequency")
-    index = df_y.index.copy()
-    n = len(index)
-    x = df_x.iloc[sample_length-max([vol_period, frequency])+1:].values
-    y = df_y.iloc[sample_length-max([vol_period, frequency])+1:].values
+    x = df_x.iloc[sample_length-max([vol_period, frequency]):].values
+    y = df_y.iloc[sample_length-max([vol_period, frequency]):].values
     lasso_weights, _ = lasso_regression_ic(df_y, df_x, sample_length, frequency, criterion, plot_lambda=False)
     weights = selective_kalman_filter_jit(y, x, frequency, nu, lasso_weights.values, vol_target, vol_period)
-    df_weight = pd.DataFrame(columns=df_x.columns, data=weights,
-                             index=[index[sample_length+i*frequency-1] for i in range((n-sample_length)//frequency+1)])
+    df_weight = pd.DataFrame(columns=df_x.columns, data=weights, index=lasso_weights.index)
     return df_weight.fillna(0)
 
 
@@ -518,14 +515,11 @@ def ml_selective_kalman_filter(df_y: pd.DataFrame, df_x: pd.DataFrame, sample_le
         raise Exception("The period for vol_target cannot be longer than sample_length")
     if sample_length < frequency:
         raise Exception("The sample_length cannot be shorter than frequency")
-    index = df_y.index.copy()
-    n = len(index)
-    x = df_x.iloc[sample_length-max([vol_period, frequency])+1:].values
-    y = df_y.iloc[sample_length-max([vol_period, frequency])+1:].values
+    x = df_x.iloc[sample_length-max([vol_period, frequency]):].values
+    y = df_y.iloc[sample_length-max([vol_period, frequency]):].values
     lasso_weights, _ = lasso_regression_ic(df_y, df_x, sample_length, frequency, criterion, plot_lambda=False)
     weights = ml_selective_kalman_filter_jit(y, x, frequency, tau, lasso_weights.values, vol_target, vol_period)
-    df_weight = pd.DataFrame(columns=df_x.columns, data=weights,
-                             index=[index[sample_length+i*frequency-1] for i in range((n-sample_length)//frequency+1)])
+    df_weight = pd.DataFrame(columns=df_x.columns, data=weights, index=lasso_weights.index)
     return df_weight.fillna(0)
 
 
